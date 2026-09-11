@@ -24,7 +24,6 @@ class FakeClient:
         ]
         self.native_dark = native_dark
         self.user_scheme_field = user_scheme_field
-        self.logo_calls: list[int] = []
         self.scheme_writes: list[tuple[int, str]] = []
         self.calls: list[tuple[str, str, tuple]] = []
 
@@ -36,10 +35,6 @@ class FakeClient:
 
     def set_user_color_scheme(self, settings_id: int, scheme: str) -> None:
         self.scheme_writes.append((settings_id, scheme))
-
-    def fetch_company_logo(self, company_id: int) -> bytes | None:
-        self.logo_calls.append(company_id)
-        return b"PNG"
 
     def supports_native_dark_mode(self) -> bool:
         return self.native_dark
@@ -77,8 +72,6 @@ def test_builds_a_context_from_session_info() -> None:
     assert context.database == "prod"
     assert context.language == "en_US"
     assert context.current_company_name == "My Company"
-    assert context.company_logo == b"PNG"
-    assert client.logo_calls == [1]
 
 
 def test_companies_are_sorted_by_name() -> None:

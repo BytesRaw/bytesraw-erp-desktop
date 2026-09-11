@@ -263,20 +263,6 @@ class OdooClient:
             USER_SETTINGS_MODEL, "write", [[settings_id], {COLOR_SCHEME_FIELD: scheme}]
         )
 
-    def fetch_company_logo(self, company_id: int) -> bytes | None:
-        """Company logo bytes, or ``None`` when the company has no logo set."""
-        try:
-            response = self._client.get(
-                f"/web/image/res.company/{company_id}/logo",
-                params={"height": "64"},
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            _log.info("Could not fetch logo for company %s: %s", company_id, exc)
-            return None
-        content = response.content
-        return content or None
-
     # -- session handoff ---------------------------------------------------
 
     @property

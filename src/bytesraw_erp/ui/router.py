@@ -1,8 +1,8 @@
 """Declarative, path-based navigation over a :class:`QStackedWidget`.
 
-Modelled on Flet's ``ft.Router``: routes are registered as path patterns with
-dynamic ``:segments``, pages are built lazily by a factory the first time their
-route is visited, and the router keeps a history stack so :meth:`back` works.
+Routes are registered as path patterns with dynamic ``:segments``, pages are
+built lazily by a factory the first time their route is visited, and the router
+keeps a history stack so :meth:`back` works.
 
 Pages may implement either hook; both are optional:
 

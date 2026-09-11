@@ -7,15 +7,14 @@ Neither raises - both just look wrong - so they are pinned here.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
-from PySide6.QtWidgets import QFrame, QLabel
+from PySide6.QtWidgets import QFrame, QLabel, QToolButton
 
 from bytesraw_erp.constants import APP_VERSION
 from bytesraw_erp.data.models import Company, Language, SessionContext
 from bytesraw_erp.ui.theme import DARK, LIGHT, Theme
 from bytesraw_erp.ui.widgets.app_bar import AppBar, _initials
+from bytesraw_erp.ui.widgets.window_controls import WindowControls
 
 
 @pytest.fixture
@@ -85,14 +84,39 @@ def test_the_user_chip_shows_who_and_where(bar: AppBar, session: SessionContext)
     assert _label(bar, "Avatar").text() == "MA"
 
 
-def test_a_company_with_no_name_hides_its_chip(bar: AppBar, session: SessionContext) -> None:
-    """An empty chip is a floating grey pill with nothing in it."""
-    bar.set_session(session)
-    chip = bar.findChild(QFrame, "CompanyChip")
-    assert chip is not None and chip.isVisibleTo(bar)
+def test_the_bar_says_nothing_about_the_company(bar: AppBar, session: SessionContext) -> None:
+    """Odoo's own navbar owns the company; the shell does not repeat it.
 
-    bar.set_session(replace(session, current_company_id=99))
-    assert not chip.isVisibleTo(bar)
+    The chip is gone rather than hidden, so a session that names a company
+    must not bring any of it back.
+    """
+    bar.set_session(session)
+    assert bar.findChild(QFrame, "CompanyChip") is None
+    labels = {label.text() for label in bar.findChildren(QLabel)}
+    assert session.current_company_name not in labels
+
+
+# -- the window controls -----------------------------------------------------
+
+
+def test_the_bar_carries_minimise_and_close(bar: AppBar) -> None:
+    """There is no title bar to carry them - the app runs full screen."""
+    controls = bar.findChild(WindowControls)
+    assert controls is not None
+    for name in ("MinimizeButton", "CloseButton"):
+        button = controls.findChild(QToolButton, name)
+        assert button is not None, f"no {name}"
+        assert not button.icon().isNull()
+
+
+def test_the_window_controls_follow_the_theme(bar: AppBar) -> None:
+    """They hold their own icons, so the bar has to repaint them too."""
+    controls = bar.findChild(WindowControls)
+    assert controls is not None
+    before = {button.icon().cacheKey() for button, _ in controls._icons}
+    bar.apply_theme(DARK, Theme.DARK)
+    after = {button.icon().cacheKey() for button, _ in controls._icons}
+    assert before != after
 
 
 # -- the regressions ---------------------------------------------------------
@@ -105,7 +129,7 @@ def test_theming_the_separators_leaves_the_chips_alone(bar: AppBar) -> None:
     colour, wiping the background their object-name rule gives them.
     """
     bar.apply_theme(DARK, Theme.DARK)
-    for name in ("CompanyChip", "UserChip", "NavGroup"):
+    for name in ("UserChip", "NavGroup"):
         frame = bar.findChild(QFrame, name)
         assert frame is not None
         assert frame.styleSheet() == "", f"{name} was painted over"

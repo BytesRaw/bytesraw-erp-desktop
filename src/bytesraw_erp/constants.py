@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Final
 
-#: Window title / QApplication name. Equivalent to Flet's ``page.title``.
+#: Window title and QApplication name.
 APP_NAME: Final[str] = "Bytesraw ERP"
 APP_VERSION: Final[str] = "0.1.0"
 
@@ -70,6 +70,3 @@ ROUTE_ACCOUNT_NEW: Final[str] = "/accounts/new"
 ROUTE_ACCOUNT_EDIT: Final[str] = "/accounts/:account_id/edit"
 ROUTE_ODOO: Final[str] = "/odoo"
 ROUTE_SETTINGS: Final[str] = "/settings"
-
-DEFAULT_WINDOW_SIZE: Final[tuple[int, int]] = (1440, 900)
-MIN_WINDOW_SIZE: Final[tuple[int, int]] = (1024, 640)

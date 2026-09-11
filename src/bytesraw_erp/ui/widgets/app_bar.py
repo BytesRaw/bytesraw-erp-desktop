@@ -1,7 +1,8 @@
 """The native app bar that sits above the embedded Odoo client.
 
 Left to right: the shell's own identity (mark, name, version), a segmented
-navigation cluster, the active company, then the tools and the signed-in user.
+navigation cluster, then the tools, the signed-in user, and the window
+controls.
 
 Why the shell brands itself at all
 ----------------------------------
@@ -11,11 +12,13 @@ confused strip of chrome, and the user cannot tell which row belongs to the
 app and which to Odoo. So the shell claims the left edge in its own accent -
 the Bytesraw teal - while every *action* colour stays Odoo's plum.
 
-The company is **display only**. Odoo's own navbar already has a company
-switcher, and two switchers over one session can disagree; ours also had to
-write ``res.users.company_id`` to make the change stick, which is a heavier
-side effect than Odoo's own cookie-only switch. So the company slot shows where
-you are, and Odoo remains the one place that changes it.
+Nothing here is about the company
+---------------------------------
+The bar used to carry the active company's logo and name. It is gone: this
+shell does not take part in multi-company at all, so a slot that only ever said
+"you are in X" invited the question "how do I change it", to which the answer
+was always "not here". Odoo's own navbar owns that, and is now the only place
+the company is shown or switched.
 
 Read-only rule
 --------------
@@ -23,19 +26,24 @@ The language slot is only interactive when there is something to choose. With a
 single active language the combo box is replaced by a plain label - not a
 disabled combo - because a disabled control reads as "you may not", while this
 case is "there is no alternative".
+
+The window controls
+-------------------
+The app is full screen and has no title bar of its own, so minimise and close
+ride at the right-hand end of the bar - the corner they would have occupied
+anyway.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QAction, QMouseEvent, QPixmap
+from PySide6.QtGui import QAction, QMouseEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
-    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -46,8 +54,8 @@ from bytesraw_erp.core.resources import logo_scaled
 from bytesraw_erp.data.models import PrintMode, SessionContext
 from bytesraw_erp.ui.theme import APP_BAR_HEIGHT, Palette, Theme
 from bytesraw_erp.ui.widgets.icons import icon, set_icon_color
+from bytesraw_erp.ui.widgets.window_controls import WindowControls
 
-_LOGO_HEIGHT = 24
 _BRAND_HEIGHT = 22
 _AVATAR = 30
 
@@ -121,11 +129,13 @@ class AppBar(QWidget):
         self._build_brand_section(layout)
         layout.addWidget(self._separator())
         self._build_navigation_section(layout)
-        self._build_company_section(layout)
         layout.addStretch(1)
         self._build_tools_section(layout)
         layout.addWidget(self._separator())
         self._build_identity_section(layout)
+        layout.addWidget(self._separator())
+        self._window_controls = WindowControls()
+        layout.addWidget(self._window_controls)
 
         self.set_session(None)
 
@@ -181,25 +191,6 @@ class AppBar(QWidget):
         for button in (self._back, self._forward, self._reload, self._home):
             row.addWidget(button)
         layout.addWidget(group)
-
-    def _build_company_section(self, layout: QHBoxLayout) -> None:
-        self._company_chip = _ChipFrame("CompanyChip")
-        row = QHBoxLayout(self._company_chip)
-        row.setContentsMargins(10, 5, 12, 5)
-        row.setSpacing(8)
-
-        self._logo = QLabel()
-        self._logo.setFixedHeight(_LOGO_HEIGHT)
-        self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._logo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        row.addWidget(self._logo)
-
-        self._company_label = QLabel()
-        self._company_label.setObjectName("CompanyName")
-        row.addWidget(self._company_label)
-
-        self._company_chip.setToolTip("Active company - change it in Odoo's own menu")
-        layout.addWidget(self._company_chip)
 
     def _build_tools_section(self, layout: QHBoxLayout) -> None:
         """Print and appearance controls.
@@ -351,6 +342,7 @@ class AppBar(QWidget):
         for target, icon_name in self._icon_targets:
             target.setIcon(icon(icon_name))
 
+        self._window_controls.apply_theme(palette)
         self._theme_button.setIcon(icon(theme.icon_name))
         for option, action in self._theme_actions.items():
             action.setChecked(option is theme)
@@ -384,9 +376,6 @@ class AppBar(QWidget):
                 self._clear()
                 return
 
-            self._apply_logo(context.company_logo)
-            self._company_label.setText(context.current_company_name)
-            self._company_chip.setVisible(bool(context.current_company_name))
             self._apply_languages(context)
 
             name = context.user_name or context.login
@@ -406,9 +395,6 @@ class AppBar(QWidget):
     # -- rendering helpers -------------------------------------------------
 
     def _clear(self) -> None:
-        self._apply_logo(None)
-        self._company_label.setText("")
-        self._company_chip.hide()
         self._language_combo.hide()
         self._language_label.setText("")
         self._language_label.show()
@@ -417,16 +403,6 @@ class AppBar(QWidget):
         self._avatar.setText("")
         for widget in (self._user_label, self._user_meta, self._avatar):
             widget.setToolTip("")
-
-    def _apply_logo(self, data: bytes | None) -> None:
-        pixmap = QPixmap()
-        if not data or not pixmap.loadFromData(data):
-            self._logo.clear()
-            self._logo.setFixedWidth(0)
-            return
-        scaled = pixmap.scaledToHeight(_LOGO_HEIGHT, Qt.TransformationMode.SmoothTransformation)
-        self._logo.setPixmap(scaled)
-        self._logo.setFixedWidth(scaled.width())
 
     def _apply_languages(self, context: SessionContext) -> None:
         if context.has_multiple_languages:

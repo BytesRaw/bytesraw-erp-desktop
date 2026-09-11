@@ -296,13 +296,33 @@ QMessageBox QLabel {{ color: {p.text}; }}
     font-weight: 600;
 }}
 
-/* Company chip: display only - Odoo's own navbar is where it is switched. */
-#CompanyChip {{
-    background: {p.chip};
-    border: 1px solid transparent;
+/* --- Window controls ---------------------------------------------------
+   The app has no title bar, so these are the caption buttons. They are styled
+   here rather than only under ``#AppBar`` because the same widget also floats
+   over the pages that carry no app bar of their own. Close is the one
+   destructive control in the chrome, so it is the only one that answers the
+   pointer in red rather than in grey. */
+#WindowControls QToolButton {{
+    border: none;
+    border-radius: 8px;
+    padding: 7px;
+    color: {p.text};
+    background: transparent;
+}}
+#WindowControls QToolButton:hover {{ background: {p.hover}; }}
+#WindowControls QToolButton:pressed {{ background: {p.chip}; }}
+/* Tinted, not the solid red Windows fills the button with. The glyph is a
+   stroked bitmap in the theme's text colour and cannot be swapped to white
+   from a stylesheet, so a solid fill would leave near-black on #c0392b. */
+#WindowControls #CloseButton:hover {{ background: {p.danger_bg}; }}
+#WindowControls #CloseButton:pressed {{ background: {p.danger_border}; }}
+/* The floating pair needs a ground of its own: it sits directly on a page,
+   with no bar behind it to separate it from the content. */
+#WindowControlsOverlay {{
+    background: {p.app_bar};
+    border: 1px solid {p.border};
     border-radius: 10px;
 }}
-#CompanyName {{ font-weight: 600; font-size: 13px; color: {p.text}; }}
 
 #UserChip {{ background: transparent; border-radius: 10px; }}
 #UserChip:hover {{ background: {p.hover}; }}

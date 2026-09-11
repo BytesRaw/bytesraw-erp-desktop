@@ -1,17 +1,36 @@
-"""The single application window and its route table."""
+"""The single application window and its route table.
+
+The window is full screen for its whole life. That is a product decision, not a
+default: this is a till and back-office shell, and a resizable window invites
+someone to leave a sliver of the desktop showing, drag Odoo half off the screen,
+or lose the app behind Explorer mid-transaction. Full screen also covers the
+Windows taskbar, so the only chrome on the display is the app's own.
+
+The cost of that is the title bar, and with it the minimise and close buttons.
+They come back as :class:`WindowControls` inside the app bar. The pages that
+carry no app bar - the account list, the account form, the settings page - get
+the floating set this window owns, because a first launch with no saved account
+lands on the account form, and a screen with no way to quit the application is
+not a screen this app is allowed to show.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QByteArray, QSettings
-from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget, QWidget
+from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QResizeEvent
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QWidget,
+)
 
 from bytesraw_erp.constants import (
     APP_NAME,
-    DEFAULT_WINDOW_SIZE,
-    MIN_WINDOW_SIZE,
     ROUTE_ACCOUNT_EDIT,
     ROUTE_ACCOUNT_NEW,
     ROUTE_ACCOUNTS,
@@ -27,20 +46,21 @@ from bytesraw_erp.ui.pages.settings_page import SettingsPage
 from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.theme import Palette
 from bytesraw_erp.ui.widgets.icons import set_icon_color
+from bytesraw_erp.ui.widgets.window_controls import WindowControls
 
 _log = logging.getLogger(__name__)
 
-_GEOMETRY_KEY = "window/geometry"
+#: Gap between the floating window controls and the top-right corner.
+_OVERLAY_MARGIN = 14
 
 
 class MainWindow(QMainWindow):
-    """Hosts the router. All navigation happens inside one window."""
+    """Hosts the router. All navigation happens inside one full-screen window."""
 
     def __init__(self, context: AppContext) -> None:
         super().__init__()
         self._context = context
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(*MIN_WINDOW_SIZE)
 
         # Before any page is built: an icon is stroked in whatever colour was
         # last set, and the default is the light palette's near-black. The app
@@ -49,9 +69,9 @@ class MainWindow(QMainWindow):
         # there is no app bar on that screen.
         set_icon_color(context.theme.palette.text)
 
-        stack = QStackedWidget(self)
-        self.setCentralWidget(stack)
-        self.router = Router(stack, self)
+        self._stack = QStackedWidget(self)
+        self.setCentralWidget(self._stack)
+        self.router = Router(self._stack, self)
 
         # Forms are rebuilt on each visit so they never show stale input; the
         # Odoo page is kept alive so the embedded browser survives navigation.
@@ -71,7 +91,9 @@ class MainWindow(QMainWindow):
             ROUTE_SETTINGS, lambda: SettingsPage(context, self.router), keep_alive=False
         )
 
-        self._restore_geometry()
+        self._overlay = self._build_overlay()
+        self.router.route_changed.connect(lambda _path: self._sync_overlay())
+
         # Connected before any page exists, so this runs first on every theme
         # change: the new icon colour is in place by the time a page's own
         # handler re-renders its icons.
@@ -95,6 +117,7 @@ class MainWindow(QMainWindow):
 
     def _on_theme_changed(self, palette: Palette) -> None:
         set_icon_color(palette.text)
+        self._overlay_controls.apply_theme(palette)
         self._repolish(palette)
 
     def _repolish(self, _palette: object) -> None:
@@ -103,19 +126,74 @@ class MainWindow(QMainWindow):
             widget.style().polish(widget)
         self.update()
 
-    # -- geometry ----------------------------------------------------------
+    # -- full screen -------------------------------------------------------
 
-    def _settings(self) -> QSettings:
-        return QSettings()
+    def changeEvent(self, event: QEvent) -> None:
+        """Put the window straight back into full screen if anything leaves it.
 
-    def _restore_geometry(self) -> None:
-        saved = self._settings().value(_GEOMETRY_KEY)
-        if isinstance(saved, QByteArray) and not saved.isEmpty():
-            self.restoreGeometry(saved)
-        else:
-            self.resize(*DEFAULT_WINDOW_SIZE)
+        Alt+Tab, a shell command or Qt itself can drop the flag; minimising is
+        the one departure that is allowed, because the app bar offers it.
+
+        The correction is queued rather than applied here: calling
+        ``showFullScreen`` from inside the state change that triggered it
+        re-enters the transition Qt is still running, and the new state is
+        dropped on the floor. Measured - the direct call leaves the window
+        normal.
+        """
+        super().changeEvent(event)
+        if event.type() is QEvent.Type.WindowStateChange:
+            QTimer.singleShot(0, self._enforce_full_screen)
+
+    def _enforce_full_screen(self) -> None:
+        state = self.windowState()
+        if state & Qt.WindowState.WindowMinimized:
+            return
+        if not (state & Qt.WindowState.WindowFullScreen):
+            self.showFullScreen()
+
+    # -- floating window controls ------------------------------------------
+
+    def _build_overlay(self) -> QFrame:
+        """The minimise/close pair for pages that have no app bar of their own.
+
+        A child of the window rather than of a page, so it is positioned
+        against the physical top-right corner. The pages are centred columns
+        inside a scroll area; controls placed in one of those would drift
+        towards the middle of the screen and scroll away with the content.
+        """
+        frame = QFrame(self)
+        frame.setObjectName("WindowControlsOverlay")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(5, 5, 5, 5)
+        row.setSpacing(0)
+        self._overlay_controls = WindowControls()
+        row.addWidget(self._overlay_controls)
+        self._overlay_controls.apply_theme(self._context.theme.palette)
+        frame.hide()
+        return frame
+
+    def _sync_overlay(self) -> None:
+        """Show the floating pair only where the page provides no other set."""
+        page = self._stack.currentWidget()
+        has_own = page is not None and page.findChild(WindowControls) is not None
+        self._overlay.setVisible(not has_own)
+        if not has_own:
+            self._position_overlay()
+
+    def _position_overlay(self) -> None:
+        self._overlay.adjustSize()
+        self._overlay.move(
+            self.width() - self._overlay.width() - _OVERLAY_MARGIN, _OVERLAY_MARGIN
+        )
+        self._overlay.raise_()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._overlay.isVisible():
+            self._position_overlay()
+
+    # -- shutdown ----------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._settings().setValue(_GEOMETRY_KEY, self.saveGeometry())
         self._context.shutdown()
         super().closeEvent(event)

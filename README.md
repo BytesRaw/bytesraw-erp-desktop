@@ -4,9 +4,8 @@ A native desktop client for **Odoo 19**. It embeds the Odoo web client in a real
 Chromium view, under a native app bar, and manages several Odoo accounts so the
 login screen appears once per server rather than once per launch.
 
-> **Why not Flet?** The project was originally specified in Flet. Flet's WebView
-> control is unsupported on Windows and Linux, which makes the app's main screen
-> impossible to build there. See [ADR 0001](docs/adr/0001-stack-choice.md).
+> Built on PySide6 + QtWebEngine. See
+> [ADR 0001](docs/adr/0001-stack-choice.md) for why.
 
 ## Features
 
@@ -17,12 +16,16 @@ login screen appears once per server rather than once per launch.
   restored on the next launch.
 - **Isolated sessions.** Each account gets its own browser profile and cookie
   jar, so two logins on the same server never collide.
+- **Full screen, always.** One window, no title bar, no taskbar showing: the
+  display belongs to the app. Minimise and close live at the right-hand end of
+  the app bar, and on the screens that have no app bar they float in the same
+  corner.
 - **Native app bar.** The product mark and build number, a segmented navigation
-  cluster, the active company, the signed-in user and the interface language sit
-  above the web view, on a surface of their own so the native chrome never reads
-  as part of the Odoo navbar below it. The company is shown but not changed here
-  - Odoo's own menu owns that - and the language slot renders as plain text when
-  there is only one to choose from.
+  cluster, the signed-in user, the interface language and the window controls
+  sit above the web view, on a surface of their own so the native chrome never
+  reads as part of the Odoo navbar below it. The language slot renders as plain
+  text when there is only one to choose from. Nothing here is about the
+  company: Odoo's own navbar owns that entirely.
 - **The build number is always on screen.** Next to the mark in the app bar, on
   the account form, and in Settings under About, with the folders the app writes
   to - the things support asks for first.

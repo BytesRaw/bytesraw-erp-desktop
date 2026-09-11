@@ -1,7 +1,7 @@
 # Bytesraw ERP - Roadmap to 1.0.0
 
 A native desktop shell for Odoo 19, built on PySide6 + QtWebEngine.
-See [ADR 0001](docs/adr/0001-stack-choice.md) for why not Flet.
+See [ADR 0001](docs/adr/0001-stack-choice.md) for the stack decision.
 
 Legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
@@ -13,7 +13,7 @@ The app opens, connects to one Odoo server, and renders `/odoo` under a native
 app bar.
 
 - [x] **M1.1** Project layout, packaging metadata, dependency pinning
-- [x] **M1.2** ADR recording the stack decision and the Flet WebView finding
+- [x] **M1.2** ADR recording the stack decision and the embedded-web-view requirement
 - [x] **M1.3** Path, logging and typed-error infrastructure
 - [x] **M1.4** `Account` / `SessionContext` data model
 - [x] **M1.5** Account registry: JSON metadata + passwords in Windows Credential Manager
@@ -70,7 +70,8 @@ Delivered after v0.1.0 on direct request.
 ## v0.1.4 - Company switching removed `[x]`
 
 - [x] **M1.34** Remove the company switcher from the app bar; Odoo's own navbar
-      owns that choice. The company name and logo remain as read-only display.
+      owns that choice. The company name and logo remained as read-only display
+      until v0.1.6, which dropped those too.
 
 ## v0.1.5 - Theme, preview, logo, notifications `[x]`
 
@@ -83,6 +84,18 @@ Delivered after v0.1.0 on direct request.
       account-form branding
 - [x] **M1.38** Download notifications with "Show in folder", and a
       confirmation when a print job is sent
+
+## v0.1.6 - Full-screen kiosk shell `[x]`
+
+- [x] **M1.39** The window is full screen for its whole life: no title bar, and
+      the Windows taskbar is covered. `changeEvent` puts it back if anything
+      takes it out
+- [x] **M1.40** `WindowControls` - minimise and close inside the app bar, plus
+      a floating set for the pages that carry no app bar, so the first-launch
+      account form is never a screen with no way to quit
+- [x] **M1.41** Company name and logo removed from the app bar, and with them
+      the per-session logo round trip. This shell does not take part in
+      multi-company at all
 
 ## v0.2.0 - Robustness `[ ]`
 
@@ -152,8 +165,8 @@ The reason the project is named `Odoo-POS-Desk`.
   or released in this cycle.
 - An offline POS mode. Odoo's own POS already caches orders client-side; a
   second offline layer in the shell would fight it.
-- A company switcher. Odoo's navbar already has one, and a second control over
-  the same session can disagree with it. The app bar shows the active company
-  but does not change it.
+- Anything to do with multi-company. Odoo's navbar owns the company: the shell
+  neither shows it nor switches it, because a second control over the same
+  session can only disagree with the first.
 - Any modification of the Odoo server. This app is a client, and installs no
   addon on the target database.

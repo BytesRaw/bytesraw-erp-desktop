@@ -78,7 +78,9 @@ def run(argv: list[str] | None = None) -> int:
 
     context = AppContext(theme, app)
     window = MainWindow(context)
-    window.show()
+    # Full screen from the first paint - the window has no other size, and
+    # ``show()`` first would flash a framed window before it switched.
+    window.showFullScreen()
     window.start()
 
     app.aboutToQuit.connect(context.shutdown)

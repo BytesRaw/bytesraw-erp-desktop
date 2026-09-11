@@ -159,7 +159,6 @@ class SessionContext:
     companies: tuple[Company, ...]
     current_company_id: int
     languages: tuple[Language, ...] = ()
-    company_logo: bytes | None = None
     #: True when the server has a real dark stylesheet to serve. False on
     #: plain Odoo 19 Community, which hardcodes ``ir_http.color_scheme()`` to
     #: "light" - there the app falls back to Chromium's ForceDarkMode so the

@@ -121,6 +121,12 @@ _PATHS: dict[str, str] = {
         '<circle cx="18.5" cy="14.5" r="2.4"/>'
         '<path d="M18.5 10.6v1.1M18.5 17.3v1.1M22 14.5h-1.1M16.1 14.5H15"/>'
     ),
+    # --- window controls -------------------------------------------------
+    # Drawn at the same 1.8 stroke as everything else rather than at the
+    # hairline Windows uses, so they sit in the app bar as siblings of the
+    # navigation icons instead of reading as a foreign caption strip.
+    "minimize": '<path d="M5 12h14"/>',
+    "close": '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
 }
 
 _TEMPLATE = (

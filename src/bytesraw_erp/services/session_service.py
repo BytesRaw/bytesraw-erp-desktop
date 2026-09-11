@@ -2,9 +2,9 @@
 
 Odoo 19's ``session_info`` (``addons/web/models/ir_http.py``) already carries
 the user name, login, database, active language and the allowed companies. Only
-the language *list* and the company logo need extra round trips, and both are
-tolerated to fail - a missing logo or an unavailable language list must never
-block the user from reaching their Odoo screen.
+the language *list* needs an extra round trip, and it is tolerated to fail - an
+unavailable language list must never block the user from reaching their Odoo
+screen.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ def _companies_from_session(info: dict[str, Any]) -> tuple[tuple[Company, ...], 
     """Extract allowed companies, ordered the way Odoo orders them.
 
     Portal and public users have no ``user_companies`` key at all - Odoo only
-    adds it for internal users - so this degrades to an empty tuple, which the
-    app bar renders as a read-only, empty company slot.
+    adds it for internal users - so this degrades to an empty tuple and a
+    current id of zero.
     """
     user_companies = info.get("user_companies") or {}
     allowed = user_companies.get("allowed_companies") or {}
@@ -58,7 +58,6 @@ def build_session_context(client: OdooClient, info: dict[str, Any]) -> SessionCo
     companies, current_company_id = _companies_from_session(info)
     context = info.get("user_context") or {}
     languages = _fetch_languages(client)
-    logo = client.fetch_company_logo(current_company_id) if current_company_id else None
     native_dark = client.supports_native_dark_mode()
     user_settings = info.get("user_settings") or {}
     supports_user_scheme = client.supports_user_color_scheme()
@@ -73,7 +72,6 @@ def build_session_context(client: OdooClient, info: dict[str, Any]) -> SessionCo
         companies=companies,
         current_company_id=current_company_id,
         languages=languages,
-        company_logo=logo,
         native_dark_mode=native_dark,
         user_settings_id=int(user_settings.get("id") or 0),
         user_color_scheme_supported=supports_user_scheme,
