@@ -179,3 +179,9 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# Claude Code working notes - local only, intentionally untracked
+CLAUDE.md
+
+# Qt / app runtime artefacts
+*.qm
+.qt_for_python/

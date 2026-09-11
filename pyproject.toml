@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bytesraw-erp"
+version = "0.1.0"
+description = "Bytesraw ERP - a native desktop shell for Odoo 19"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "LGPL-3.0-or-later" }
+authors = [{ name = "BytesRaw", email = "admin@bytesraw.com" }]
+
+dependencies = [
+    "PySide6>=6.11.0",
+    "httpx>=0.28.1",
+    "keyring>=25.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "ruff>=0.6",
+    "pyinstaller>=6.10",
+]
+
+[project.gui-scripts]
+bytesraw-erp = "bytesraw_erp.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bytesraw_erp = ["resources/*", "resources/**/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,8 @@
+# Runtime dependencies for Bytesraw ERP.
+# PySide6 6.11+ is required: it is the first series shipping cp314 wheels and
+# it bundles QtWebEngine (Chromium) in PySide6-Addons, which renders the Odoo 19
+# web client. Flet is deliberately NOT used - its WebView control is unsupported
+# on Windows and Linux (see docs/adr/0001-stack-choice.md).
+PySide6>=6.11.0
+httpx>=0.28.1
+keyring>=25.0.0

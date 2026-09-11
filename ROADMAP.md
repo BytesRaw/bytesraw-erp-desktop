@@ -1,0 +1,159 @@
+# Bytesraw ERP - Roadmap to 1.0.0
+
+A native desktop shell for Odoo 19, built on PySide6 + QtWebEngine.
+See [ADR 0001](docs/adr/0001-stack-choice.md) for why not Flet.
+
+Legend: `[x]` done · `[~]` in progress · `[ ]` not started
+
+---
+
+## v0.1.0 - Walking skeleton `[x]`
+
+The app opens, connects to one Odoo server, and renders `/odoo` under a native
+app bar.
+
+- [x] **M1.1** Project layout, packaging metadata, dependency pinning
+- [x] **M1.2** ADR recording the stack decision and the Flet WebView finding
+- [x] **M1.3** Path, logging and typed-error infrastructure
+- [x] **M1.4** `Account` / `SessionContext` data model
+- [x] **M1.5** Account registry: JSON metadata + passwords in Windows Credential Manager
+- [x] **M1.6** Odoo 19 JSON-RPC client (`authenticate`, `session_info`, `call_kw`, database list)
+- [x] **M1.7** Per-account `QWebEngineProfile` with isolated, persistent cookie storage
+- [x] **M1.8** Cookie-jar handoff from the RPC client to the web profile (session + proxy sticky cookies)
+- [x] **M1.9** Path-based `Router` with dynamic segments and history
+- [x] **M1.10** Add-account form with live database discovery and credential validation
+- [x] **M1.11** Account list with open / edit / remove
+- [x] **M1.12** Odoo page: embedded web client, external links to the system browser
+- [x] **M1.13** App bar: company logo + name, user, language, navigation actions
+- [x] **M1.14** Read-only company and language slots when only one record exists
+- [x] **M1.15** Last-visited path remembered per account and restored on launch
+- [x] **M1.16** Smoke test against a live Odoo 19 instance (`demo.fatoora.cloud`)
+
+## v0.1.1 - Appearance and printing `[x]`
+
+Delivered after v0.1.0 on direct request.
+
+- [x] **M1.17** Light / dark / match-system theme with a picker in the app bar
+- [x] **M1.18** Theme carried into Odoo via the `color_scheme` cookie, with
+      Chromium ForceDarkMode as the fallback for servers that ignore it
+- [x] **M1.19** Fix invisible menu text in dark mode; every self-painting widget
+      now declares both background and foreground
+- [x] **M1.20** WCAG AA contrast tests over both palettes
+- [x] **M1.21** Printing: direct to the Windows default printer, or via the
+      system print dialog
+- [x] **M1.22** `window.print()` from Odoo (POS receipts) routed to the account's
+      configured print mode
+- [x] **M1.23** Odoo report PDFs opened in Chromium's viewer; PDFs on disk
+      printable through `QPdfDocument`
+
+## v0.1.2 - Settings page and report printing `[x]`
+
+- [x] **M1.24** Local settings store (`settings.json`), separate from accounts
+- [x] **M1.25** Settings page: appearance, print mode, printer, auto-print, keep-a-copy
+- [x] **M1.26** Printer selection honoured by every print path, with fallback to
+      the Windows default when a configured printer disappears
+- [x] **M1.27** Odoo QWeb report downloads intercepted and printed per local
+      settings - this is what makes Odoo's own Print button reach paper
+- [x] **M1.28** Ordinary attachments and exports still go to Downloads
+- [x] **M1.29** Theme written to `res.users.settings.color_scheme`, which
+      outranks the cookie; capability-probed so an absent addon is a no-op
+- [x] **M1.30** Per-account print mode removed in favour of app-wide settings
+
+## v0.1.3 - Printing and company fixes `[x]`
+
+- [x] **M1.31** Recognise Odoo 19's blob-based report download, so auto-printing
+      fires on arrival with no second click (`ReportRequestWatcher`)
+- [x] **M1.32** Guard against claiming an unrelated blob PDF as a report
+- [x] **M1.33** Company switch writes `res.users.company_id`, re-reads the
+      session and reloads - the same shape as the language switch
+
+## v0.1.4 - Company switching removed `[x]`
+
+- [x] **M1.34** Remove the company switcher from the app bar; Odoo's own navbar
+      owns that choice. The company name and logo remain as read-only display.
+
+## v0.1.5 - Theme, preview, logo, notifications `[x]`
+
+- [x] **M1.35** Remove the "match system" theme: it re-entered `apply()` and
+      double-applied, leaving the web view stuck loading. Light and Dark only,
+      Light by default
+- [x] **M1.36** `PrintMode.PREVIEW` using `QPrintPreviewDialog` - Windows' own
+      print dialog has no preview pane
+- [x] **M1.37** Product logo bundled inside the package; window, taskbar and
+      account-form branding
+- [x] **M1.38** Download notifications with "Show in folder", and a
+      confirmation when a print job is sent
+
+## v0.2.0 - Robustness `[ ]`
+
+The app survives the things a real deployment does to it.
+
+- [ ] **M2.1** Session expiry detection and silent re-authentication
+- [ ] **M2.2** Offline / server-unreachable screen with retry
+- [ ] **M2.3** Two-factor authentication: fall back to the HTML login form in-view
+- [ ] **M2.4** Certificate-error UX (trust-once prompt instead of a config checkbox only)
+- [ ] **M2.5** Download manager panel with progress and history (per-download notifications landed in v0.1.5)
+- [ ] **M2.8** Notify an auto-print *failure* as a toast rather than a modal (successes already toast)
+- [ ] **M2.6** Proxy configuration honouring Windows system settings
+- [ ] **M2.7** Crash and error reporting to a local log with a "copy diagnostics" action
+
+## v0.3.0 - Point of sale `[ ]`
+
+The reason the project is named `Odoo-POS-Desk`.
+
+- [x] **M3.1** Receipt printing via `QWebEngineView.print()` to a `QPrinter` (done in v0.1.1)
+- [ ] **M3.2** Printer selection and paper profile per account
+- [ ] **M3.3** ESC/POS direct printing for thermal printers over USB and serial
+- [ ] **M3.4** Barcode scanner input (HID keyboard-wedge pass-through to the web view)
+- [ ] **M3.5** Cash drawer kick signal
+- [ ] **M3.6** Customer-facing second display on a secondary monitor
+- [ ] **M3.7** Kiosk mode: frameless, always-on-top, no navigation chrome
+
+## v0.4.0 - Multi-account fluency `[ ]`
+
+- [ ] **M4.1** Account switcher in the app bar without a round trip to the list
+- [ ] **M4.2** Multiple accounts open at once as tabs
+- [ ] **M4.3** Per-account accent colour and window title
+- [ ] **M4.6** Per-account print override, for a POS till beside an office desk
+- [ ] **M4.5** Import and export of account metadata (never passwords)
+
+## v0.5.0 - Polish `[ ]`
+
+- [x] **M5.1** Dark theme following the Windows system setting (done in v0.1.1)
+- [x] **M5.2** Application icon (done in v0.1.5); branded splash still open
+- [ ] **M5.3** Global keyboard shortcuts (reload, home, switch account, zoom)
+- [ ] **M5.4** Zoom level persisted per account
+- [ ] **M5.5** System tray icon with quick account switching
+- [ ] **M5.6** First-run onboarding
+
+## v0.6.0 - Quality gates `[ ]`
+
+- [ ] **M6.1** Unit tests for the account store, router and model layers
+- [ ] **M6.2** `pytest-qt` tests for the app bar's read-only rule and the form
+- [ ] **M6.3** Integration test against a disposable Odoo 19 container
+- [ ] **M6.4** `ruff` clean in CI
+- [ ] **M6.5** GitHub Actions matrix build for Windows
+
+## v1.0.0 - Release `[ ]`
+
+- [ ] **M7.1** PyInstaller one-folder build reproducible from a clean checkout
+- [ ] **M7.2** Signed MSI or Inno Setup installer
+- [ ] **M7.3** In-app update check
+- [ ] **M7.4** Administrator deployment guide (silent install, pre-seeded accounts)
+- [ ] **M7.5** End-user manual
+- [ ] **M7.6** Verified against Odoo 19.0 stable, Online and on-premise
+- [ ] **M7.7** Tagged `v1.0.0` release with changelog
+
+---
+
+## Out of scope for 1.0.0
+
+- macOS and Linux builds. The stack supports both; they are simply not tested
+  or released in this cycle.
+- An offline POS mode. Odoo's own POS already caches orders client-side; a
+  second offline layer in the shell would fight it.
+- A company switcher. Odoo's navbar already has one, and a second control over
+  the same session can disagree with it. The app bar shows the active company
+  but does not change it.
+- Any modification of the Odoo server. This app is a client, and installs no
+  addon on the target database.

@@ -1,0 +1,465 @@
+"""The home page: the Odoo 19 web client embedded under a native app bar.
+
+Sign-in happens over JSON-RPC, not by driving the HTML login form. The
+resulting ``session_id`` cookie is planted into this account's QtWebEngine
+profile, so the browser surface opens already authenticated and the RPC client
+and the embedded client share one Odoo session.
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+from pathlib import Path
+
+from PySide6.QtCore import QProcess, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from bytesraw_erp.constants import (
+    ODOO_HOME_PATH,
+    ROUTE_ACCOUNT_NEW,
+    ROUTE_ACCOUNTS,
+    ROUTE_SETTINGS,
+)
+from bytesraw_erp.core.errors import BytesrawError, OdooCredentialsRejected
+from bytesraw_erp.core.paths import downloads_dir
+from bytesraw_erp.data.models import Account, PrintMode, SessionContext
+from bytesraw_erp.services.print_service import PrintError
+from bytesraw_erp.services.session_service import (
+    apply_odoo_color_scheme,
+    build_session_context,
+    open_session,
+    set_user_language,
+)
+from bytesraw_erp.services.tasks import run_async
+from bytesraw_erp.ui.app_context import AppContext
+from bytesraw_erp.ui.router import Router
+from bytesraw_erp.ui.theme import Palette
+from bytesraw_erp.ui.widgets.app_bar import AppBar
+from bytesraw_erp.ui.widgets.banner import Banner
+from bytesraw_erp.ui.widgets.toast import ToastArea
+from bytesraw_erp.ui.widgets.web_view import OdooWebView
+
+_log = logging.getLogger(__name__)
+
+
+class OdooPage(QWidget):
+    """Hosts the app bar plus one :class:`OdooWebView` per active account."""
+
+    def __init__(self, context: AppContext, router: Router, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._context = context
+        self._router = router
+        self._web: OdooWebView | None = None
+        self._web_account_id: str | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._app_bar = AppBar()
+        layout.addWidget(self._app_bar)
+        self._connect_app_bar()
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)  # indeterminate
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(2)
+        self._progress.hide()
+        layout.addWidget(self._progress)
+
+        self._stack = QStackedWidget()
+        layout.addWidget(self._stack, 1)
+
+        self._status = self._build_status_panel()
+        self._stack.addWidget(self._status)
+
+        #: Download and print notifications, floated over the web view.
+        self._toasts = ToastArea(self._stack)
+
+        # The app bar is a pure projection of the session, so it follows the
+        # context rather than being poked from every action that changes it.
+        context.session_changed.connect(self._app_bar.set_session)
+        context.theme.theme_changed.connect(self._on_theme_changed)
+        context.printing.finished.connect(self._on_print_finished)
+        context.profiles.report_downloaded.connect(self._on_report_downloaded)
+        context.profiles.file_downloaded.connect(self._on_file_downloaded)
+        self._app_bar.apply_theme(context.theme.palette, context.theme.theme)
+
+    def _build_status_panel(self) -> QWidget:
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(48, 48, 48, 48)
+        panel_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_label = QLabel("Connecting to Odoo...")
+        self._status_label.setObjectName("MutedLabel")
+        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_banner = Banner()
+        self._status_banner.setMaximumWidth(520)
+        panel_layout.addWidget(self._status_label)
+        panel_layout.addWidget(self._status_banner)
+        return panel
+
+    def _connect_app_bar(self) -> None:
+        bar = self._app_bar
+        bar.back_requested.connect(lambda: self._web and self._web.back())
+        bar.forward_requested.connect(lambda: self._web and self._web.forward())
+        bar.reload_requested.connect(lambda: self._web and self._web.reload())
+        bar.home_requested.connect(self._go_odoo_home)
+        bar.language_changed.connect(self._change_language)
+        bar.switch_account_requested.connect(lambda: self._router.go(ROUTE_ACCOUNTS))
+        bar.manage_accounts_requested.connect(lambda: self._router.go(ROUTE_ACCOUNTS))
+        bar.sign_out_requested.connect(self._sign_out)
+        bar.print_requested.connect(self._print)
+        bar.theme_requested.connect(self._context.theme.set_theme)
+        bar.settings_requested.connect(lambda: self._router.go(ROUTE_SETTINGS))
+
+    # -- router hooks ------------------------------------------------------
+
+    def on_enter(self, _params: dict[str, str]) -> None:
+        account = self._context.store.active
+        if account is None:
+            self._router.reset_to(ROUTE_ACCOUNT_NEW)
+            return
+
+        live = self._context.session is not None and self._context.account is not None
+        if live and self._context.account.id == account.id:
+            self._show_web(account)
+            self._app_bar.set_session(self._context.session)
+            return
+
+        self._authenticate(account)
+
+    # -- authentication ----------------------------------------------------
+
+    def _authenticate(self, account: Account) -> None:
+        try:
+            password = self._context.store.get_password(account.id)
+        except BytesrawError as exc:
+            self._show_error(str(exc))
+            return
+
+        if not password:
+            # The vault entry is gone (cleared profile, restored machine).
+            # Send the user to the form rather than failing cryptically.
+            _log.warning("No stored password for account %s; opening the form", account.id)
+            self._router.go(f"/accounts/{account.id}/edit")
+            return
+
+        self._show_status(f"Signing in to {account.name}...")
+
+        def done(result: object) -> None:
+            client, session = result  # type: ignore[misc]
+            self._context.adopt_session(account, client, session)
+            self._show_web(account, reload_home=True)
+
+        run_async(open_session, account, password, on_success=done, on_error=self._on_auth_failed)
+
+    def _on_auth_failed(self, exc: Exception) -> None:
+        account = self._context.store.active
+        if isinstance(exc, OdooCredentialsRejected) and account is not None:
+            self._discard_rejected_account(account, exc)
+            return
+        self._show_error(
+            f"{exc}\n\nChoose 'Manage accounts' from the menu to correct the "
+            "connection details."
+        )
+
+    def _discard_rejected_account(self, account: Account, exc: Exception) -> None:
+        """Delete a saved account the server will never accept, and say so.
+
+        Only :class:`OdooCredentialsRejected` reaches here: the server answered,
+        and answered that these details are wrong. A connection failure, a
+        timeout or a two-factor prompt leaves the account alone - those are
+        temporary, or need a different fix, and deleting on them would throw a
+        working account away because the network was down.
+
+        The details themselves are not secret and are tedious to retype, so
+        they are carried into the add form. Only the password is gone, and that
+        is the part that has to be typed again anyway.
+        """
+        _log.warning("Removing account %s - the server rejected it: %s", account.id, exc)
+        try:
+            self._context.remove_account(account.id)
+        except BytesrawError as removal_failed:
+            self._show_error(f"{exc}\n\n{removal_failed}")
+            return
+
+        notice = (
+            f"{exc}\n\n'{account.name}' has been removed from this computer, "
+            "along with its saved password. Nothing changed on the Odoo server."
+        )
+        if self._context.store.is_empty:
+            self._context.post_notice(notice, prefill=account)
+            self._router.reset_to(ROUTE_ACCOUNT_NEW)
+        else:
+            self._context.post_notice(notice)
+            self._router.reset_to(ROUTE_ACCOUNTS)
+
+    # -- web surface -------------------------------------------------------
+
+    def _show_web(self, account: Account, *, reload_home: bool = False) -> None:
+        if self._web is None or self._web_account_id != account.id:
+            self._replace_web_view(account)
+            reload_home = True
+
+        assert self._web is not None
+        if reload_home:
+            self._web.open_home()
+        self._stack.setCurrentWidget(self._web)
+
+    def _replace_web_view(self, account: Account) -> None:
+        """Build the browser surface for ``account`` and retire the previous one."""
+        if self._web is not None:
+            self._stack.removeWidget(self._web)
+            self._web.deleteLater()
+
+        profile = self._context.profiles.profile_for(account)
+        web = OdooWebView(account, profile, self)
+        web.path_changed.connect(self._on_path_changed)
+        web.loading_changed.connect(self._on_loading_changed)
+        web.print_requested.connect(self._on_page_print_requested)
+        self._stack.addWidget(web)
+        self._web = web
+        self._web_account_id = account.id
+
+        # A fresh view starts with default settings, so re-apply the theme and
+        # the account's print preference before it is shown.
+        palette = self._context.theme.palette
+        session = self._context.session
+        self._context.profiles.set_color_scheme(account, palette.is_dark)
+        web.set_dark_mode(palette.is_dark, force=not (session and session.native_dark_mode))
+        self._app_bar.set_default_print_mode(self._context.settings.printing.mode)
+
+    def _on_path_changed(self, path: str) -> None:
+        """Remember where the user is so the next launch resumes there."""
+        account = self._context.account or self._context.store.active
+        if account is None or not path.startswith("/"):
+            return
+        try:
+            self._context.store.remember_path(account.id, path)
+        except BytesrawError as exc:
+            _log.warning("Could not remember the last path: %s", exc)
+
+    def _on_loading_changed(self, loading: bool) -> None:
+        self._progress.setVisible(loading)
+        if self._web is not None:
+            history = self._web.history()
+            self._app_bar.set_navigation_state(
+                can_go_back=history.canGoBack(),
+                can_go_forward=history.canGoForward(),
+            )
+
+    def _go_odoo_home(self) -> None:
+        if self._web is not None:
+            self._web.open_path(ODOO_HOME_PATH)
+
+    # -- app bar actions ---------------------------------------------------
+
+    def _change_language(self, code: str) -> None:
+        """Write the user's language, then re-read the session and reload."""
+        session = self._context.session
+        client = self._context.client
+        if session is None or client is None:
+            return
+
+        self._show_status("Applying language...")
+
+        def apply() -> SessionContext:
+            set_user_language(client, session.uid, code)
+            return build_session_context(client, client.session_info())
+
+        def done(new_session: SessionContext) -> None:
+            self._context.update_session(new_session)
+            account = self._context.account
+            if account is not None:
+                self._show_web(account)
+            if self._web is not None:
+                self._web.reload()
+
+        def failed(exc: Exception) -> None:
+            self._app_bar.set_session(session)  # roll the combo back
+            self._show_error(str(exc))
+
+        run_async(apply, on_success=done, on_error=failed)
+
+    def _sign_out(self) -> None:
+        account = self._context.account
+        if account is not None:
+            self._context.profiles.clear_session(account)
+        self._context.release_session()
+        self._app_bar.set_session(None)
+        if self._web is not None:
+            self._stack.removeWidget(self._web)
+            self._web.deleteLater()
+            self._web = None
+            self._web_account_id = None
+        self._router.reset_to(ROUTE_ACCOUNTS)
+
+    # -- theme -------------------------------------------------------------
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._app_bar.apply_theme(palette, self._context.theme.theme)
+        self._apply_theme_to_odoo(palette)
+
+    def _apply_theme_to_odoo(self, palette: Palette) -> None:
+        """Carry the app's appearance into the embedded Odoo client.
+
+        Three mechanisms, applied according to what the server actually
+        supports - measured at sign-in, not guessed from the edition:
+
+        1. ``res.users.settings.color_scheme``, when that field exists. It is
+           added by an addon rather than by core, and it **outranks the
+           cookie** unless it holds "system" - so on a server that has it,
+           writing the cookie alone achieves nothing. This is the same record
+           the theme-switcher addon's own JavaScript writes, so Odoo's user
+           menu and this app agree instead of overriding each other.
+        2. The ``color_scheme`` cookie, which decides when the setting is
+           "system", and is also read client-side for chart palettes, the code
+           editor theme and the PDF viewer.
+        3. Chromium's ForceDarkMode, only for a server with no dark stylesheet
+           at all. Forcing it where one exists darkens the page twice.
+        """
+        account = self._context.account
+        if account is None or self._web is None:
+            return
+
+        session = self._context.session
+        native = bool(session and session.native_dark_mode)
+
+        # Always right for the "system" case, and cheap.
+        self._context.profiles.set_color_scheme(account, palette.is_dark)
+        self._web.set_dark_mode(palette.is_dark, force=not native)
+
+        client = self._context.client
+        if session is not None and client is not None and session.can_set_odoo_theme:
+            run_async(
+                apply_odoo_color_scheme,
+                client,
+                session,
+                self._context.theme.theme.odoo_color_scheme,
+                on_success=lambda _r: self._reload_web(),
+                on_error=self._on_theme_write_failed,
+            )
+            return
+
+        self._reload_web()
+
+    def _reload_web(self) -> None:
+        if self._web is not None:
+            self._web.reload()
+
+    def _on_theme_write_failed(self, exc: Exception) -> None:
+        """A failed theme write is not worth interrupting the user over.
+
+        The cookie and the browser-level fallback are already applied, so the
+        page still changes appearance; only Odoo's stored preference did not
+        stick.
+        """
+        _log.warning("Could not store the Odoo colour scheme: %s", exc)
+        self._reload_web()
+
+    # -- printing ----------------------------------------------------------
+
+    def _print(self, mode: PrintMode) -> None:
+        """Print the page with an explicit mode, on the configured printer."""
+        if self._web is None or self._stack.currentWidget() is not self._web:
+            return
+        try:
+            self._context.printing.print_view(
+                self._web, mode, self, self._context.settings.printing.printer_name
+            )
+        except PrintError as exc:
+            QMessageBox.warning(self, "Print", str(exc))
+
+    def _on_page_print_requested(self) -> None:
+        """Odoo called ``window.print()`` - a POS receipt, or the PDF viewer.
+
+        Honours the configured mode, so a till set to print directly puts a
+        receipt on paper without anyone touching a dialog.
+        """
+        self._print(self._context.settings.printing.mode)
+
+    def _on_report_downloaded(self, path: Path) -> None:
+        """A QWeb report PDF arrived from Odoo. Print it per local settings.
+
+        This is what makes Odoo's own Print button reach paper: the web client
+        answers a print action with a PDF download, which a plain browser would
+        simply drop in the Downloads folder.
+        """
+        settings = self._context.settings.printing
+        if settings.keep_report_copy:
+            self._keep_copy(path)
+
+        if not settings.auto_print_reports:
+            _log.info("Automatic report printing is off; kept %s", path)
+            return
+
+        try:
+            self._context.printing.print_pdf_with(path, settings, self)
+        except PrintError as exc:
+            QMessageBox.warning(self, "Print", str(exc))
+
+    def _keep_copy(self, path: Path) -> None:
+        """Copy a printed report into Downloads, without clobbering a namesake."""
+        target = downloads_dir() / path.name
+        counter = 1
+        while target.exists():
+            target = downloads_dir() / f"{path.stem} ({counter}){path.suffix}"
+            counter += 1
+        try:
+            shutil.copy2(path, target)
+            _log.info("Kept a copy of %s at %s", path.name, target)
+        except OSError as exc:
+            _log.warning("Could not keep a copy of %s: %s", path.name, exc)
+
+    def _on_file_downloaded(self, path: Path) -> None:
+        """Tell the user where a download landed, and offer to reveal it.
+
+        Odoo gives no feedback of its own once the browser takes over a
+        download, so without this a file saved from the chatter simply appears
+        to do nothing.
+        """
+        self._toasts.show_message(
+            f"Saved {path.name} to {path.parent.name}",
+            action_text="Show in folder",
+            on_action=lambda: self._reveal(path),
+        )
+
+    @staticmethod
+    def _reveal(path: Path) -> None:
+        """Open the containing folder in Explorer, selecting the file if possible."""
+        if not path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+            return
+        # Explorer selects the file when given /select; fall back to opening
+        # the folder if it is not available.
+        if not QProcess.startDetached("explorer", ["/select,", str(path)]):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+    def _on_print_finished(self, ok: bool, message: str) -> None:
+        if ok:
+            self._toasts.show_message(message or "Printed.")
+            return
+        if message:
+            QMessageBox.warning(self, "Print", message)
+
+    # -- status panel ------------------------------------------------------
+
+    def _show_status(self, message: str) -> None:
+        self._status_label.setText(message)
+        self._status_banner.clear_message()
+        self._stack.setCurrentWidget(self._status)
+
+    def _show_error(self, message: str) -> None:
+        self._status_label.setText("")
+        self._status_banner.show_error(message)
+        self._stack.setCurrentWidget(self._status)
