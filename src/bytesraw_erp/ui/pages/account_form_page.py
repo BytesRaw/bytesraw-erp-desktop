@@ -4,6 +4,12 @@ The form is also the app's login screen: it is what the user sees on a first
 launch, and it is the only place credentials are ever typed. Saving always
 authenticates first, so an account can never be stored with credentials that do
 not work.
+
+Because it is the first screen of the product, it is laid out as one centred
+card under the product mark rather than as a bare form: the two connection
+fields and the two credential fields are grouped, each label sits above its
+control so the inputs all share one width, and the build number is on screen
+from the very first launch.
 """
 
 from __future__ import annotations
@@ -11,10 +17,10 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,9 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bytesraw_erp.constants import ROUTE_ACCOUNTS, ROUTE_ODOO
+from bytesraw_erp.constants import APP_NAME, APP_VERSION, ROUTE_ACCOUNTS, ROUTE_ODOO
 from bytesraw_erp.core.errors import BytesrawError
-from bytesraw_erp.core.resources import logo_pixmap
 from bytesraw_erp.data.models import Account, normalize_base_url
 from bytesraw_erp.services.odoo_client import OdooClient
 from bytesraw_erp.services.session_service import open_session
@@ -34,13 +39,28 @@ from bytesraw_erp.services.tasks import run_async
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.widgets.banner import Banner
+from bytesraw_erp.ui.widgets.icons import icon
+from bytesraw_erp.ui.widgets.sections import BrandHeader, Card, Field, SectionHeader, rule
 
 _log = logging.getLogger(__name__)
+
+_FORM_WIDTH = 560
 
 
 def _probe_databases(url: str, verify_tls: bool) -> list[str]:
     with OdooClient(url, verify_tls=verify_tls) as client:
         return client.list_databases()
+
+
+def _row(*widgets: QWidget, stretch: int = 0) -> QWidget:
+    """Wrap widgets in one horizontal control, so a Field can hold them."""
+    holder = QWidget()
+    layout = QHBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    for index, widget in enumerate(widgets):
+        layout.addWidget(widget, 1 if index == stretch else 0)
+    return holder
 
 
 class AccountFormPage(QWidget):
@@ -52,43 +72,32 @@ class AccountFormPage(QWidget):
         self._router = router
         self._editing: Account | None = None
         self._busy = False
+        #: Section badges hold rendered bitmaps; the theme can change under
+        #: them while this page is open.
+        self._sections: list[SectionHeader] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
         container = QWidget()
-        container.setMaximumWidth(560)
+        container.setMaximumWidth(_FORM_WIDTH)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 32, 24, 32)
-        layout.setSpacing(16)
+        layout.setSpacing(18)
 
-        heading = QHBoxLayout()
-        heading.setSpacing(12)
-        mark = QLabel()
-        logo = logo_pixmap()
-        if not logo.isNull():
-            mark.setPixmap(
-                logo.scaledToHeight(32, Qt.TransformationMode.SmoothTransformation)
-            )
-            heading.addWidget(mark, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._title = QLabel("Add account")
-        self._title.setObjectName("PageTitle")
-        heading.addWidget(self._title, 1)
-        layout.addLayout(heading)
-
-        subtitle = QLabel(
-            "Connect Bytesraw ERP to an Odoo 19 server. "
-            "The password is stored in Windows Credential Manager, never in a file."
+        self._header = BrandHeader(
+            "Add account",
+            "Connect to an Odoo 19 server. The password is kept in Windows "
+            "Credential Manager, never in a file.",
         )
-        subtitle.setObjectName("MutedLabel")
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        layout.addWidget(self._header)
 
         self._banner = Banner()
         layout.addWidget(self._banner)
 
-        layout.addLayout(self._build_form())
+        layout.addWidget(self._build_card())
         layout.addLayout(self._build_actions())
+        layout.addWidget(self._footer())
         layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -97,53 +106,84 @@ class AccountFormPage(QWidget):
         scroll.setWidget(container)
         outer.addWidget(scroll)
 
+        context.theme.theme_changed.connect(self._on_theme_changed)
+        self._on_theme_changed(context.theme.palette)
+
     # -- construction ------------------------------------------------------
 
-    def _build_form(self) -> QFormLayout:
-        form = QFormLayout()
-        form.setSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    def _section(self, icon_name: str, title: str, description: str = "") -> SectionHeader:
+        header = SectionHeader(icon_name, title, description)
+        self._sections.append(header)
+        return header
+
+    def _build_card(self) -> Card:
+        card = Card()
+
+        card.body.addWidget(
+            self._section(
+                "globe",
+                "Server",
+                "Where this account connects, and which database on it.",
+            )
+        )
 
         self._url = QLineEdit()
         self._url.setPlaceholderText("https://mycompany.odoo.com")
         self._url.editingFinished.connect(self._on_url_committed)
-        form.addRow("Server URL", self._url)
+        card.body.addWidget(Field("Server URL", self._url))
 
-        database_row = QHBoxLayout()
         self._database = QComboBox()
         self._database.setEditable(True)
         self._database.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self._database.lineEdit().setPlaceholderText("Database name")
-        database_row.addWidget(self._database, 1)
         self._load_db_button = QPushButton("Load")
         self._load_db_button.setToolTip("Ask the server which databases it exposes")
         self._load_db_button.clicked.connect(self._load_databases)
-        database_row.addWidget(self._load_db_button)
-        form.addRow("Database", database_row)
+        card.body.addWidget(
+            Field("Database", _row(self._database, self._load_db_button))
+        )
+
+        card.body.addWidget(rule())
+        card.body.addWidget(
+            self._section("key", "Credentials", "Checked against the server before saving.")
+        )
 
         self._login = QLineEdit()
         self._login.setPlaceholderText("user@example.com")
-        form.addRow("Login", self._login)
+        card.body.addWidget(Field("Login", self._login))
 
         self._password = QLineEdit()
         self._password.setEchoMode(QLineEdit.EchoMode.Password)
         self._password.returnPressed.connect(self._submit)
-        form.addRow("Password", self._password)
+        self._reveal = QAction(self._password)
+        self._reveal.setToolTip("Show the password")
+        self._reveal.triggered.connect(self._toggle_password)
+        self._password.addAction(self._reveal, QLineEdit.ActionPosition.TrailingPosition)
+        card.body.addWidget(Field("Password", self._password))
+
+        card.body.addWidget(rule())
+        card.body.addWidget(
+            self._section("sliders", "This connection", "Optional, and specific to this machine.")
+        )
 
         self._name = QLineEdit()
         self._name.setPlaceholderText("Optional - defaults to the server host")
-        form.addRow("Display name", self._name)
+        card.body.addWidget(Field("Display name", self._name))
 
-        self._allow_untrusted = QCheckBox(
-            "Allow a self-signed certificate for this server"
-        )
+        self._allow_untrusted = QCheckBox("Allow a self-signed certificate for this server")
         self._allow_untrusted.setToolTip(
             "Only enable this for an on-premise server whose certificate you "
             "control. It disables TLS verification for this account."
         )
-        form.addRow("", self._allow_untrusted)
-        return form
+        card.body.addWidget(
+            Field(
+                "",
+                self._allow_untrusted,
+                "Leave this off unless the server uses a certificate your "
+                "computer does not already trust.",
+            )
+        )
+        return card
 
     def _build_actions(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -158,6 +198,19 @@ class AccountFormPage(QWidget):
         row.addWidget(self._submit_button)
         return row
 
+    def _footer(self) -> QLabel:
+        label = QLabel(f"{APP_NAME} {APP_VERSION}")
+        label.setObjectName("FieldHint")
+        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        return label
+
+    # -- theme -------------------------------------------------------------
+
+    def _on_theme_changed(self, palette: object) -> None:
+        for section in self._sections:
+            section.apply_theme(palette)  # type: ignore[arg-type]
+        self._sync_reveal_icon()
+
     # -- router hooks ------------------------------------------------------
 
     def on_enter(self, params: dict[str, str]) -> None:
@@ -167,7 +220,7 @@ class AccountFormPage(QWidget):
 
         prefill = None
         if self._editing is None:
-            self._title.setText("Add account")
+            self._header.set_title("Add account")
             self._reset_fields()
             # An account the server rejected was just deleted; its connection
             # details are still worth keeping so only the password is retyped.
@@ -175,7 +228,7 @@ class AccountFormPage(QWidget):
             if prefill is not None:
                 self._fill_from(prefill, with_password=False)
         else:
-            self._title.setText("Edit account")
+            self._header.set_title("Edit account")
             self._fill_from(self._editing)
 
         notice = self._context.take_notice()
@@ -195,6 +248,18 @@ class AccountFormPage(QWidget):
             field.clear()
         self._database.clear()
         self._allow_untrusted.setChecked(False)
+
+    def _toggle_password(self) -> None:
+        hidden = self._password.echoMode() == QLineEdit.EchoMode.Password
+        self._password.setEchoMode(
+            QLineEdit.EchoMode.Normal if hidden else QLineEdit.EchoMode.Password
+        )
+        self._sync_reveal_icon()
+
+    def _sync_reveal_icon(self) -> None:
+        hidden = self._password.echoMode() == QLineEdit.EchoMode.Password
+        self._reveal.setIcon(icon("eye" if hidden else "eye-off"))
+        self._reveal.setToolTip("Show the password" if hidden else "Hide the password")
 
     def _fill_from(self, account: Account, *, with_password: bool = True) -> None:
         """Load ``account`` into the fields.

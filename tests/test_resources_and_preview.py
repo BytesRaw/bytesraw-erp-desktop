@@ -36,6 +36,46 @@ def test_the_app_icon_is_usable(qtbot) -> None:
     assert icon.availableSizes()
 
 
+def test_the_windows_icon_ships_inside_the_package() -> None:
+    """PyInstaller needs a real .ico; a PNG cannot be an executable's icon."""
+    from importlib import resources
+
+    path = resources.files("bytesraw_erp.resources") / "icon.ico"
+    assert path.is_file()
+
+
+def test_the_app_icon_carries_a_frame_for_every_shell_surface(qtbot) -> None:
+    """One 128px bitmap scaled to 16px turns a stroked monogram to mush.
+
+    ``QPixmap.loadFromData`` on an .ico reads only the first frame, so this
+    also pins that the reader walks all of them.
+    """
+    sizes = {size.width() for size in app_icon().availableSizes()}
+    assert {16, 32, 256} <= sizes
+    assert len(sizes) >= 5
+
+
+def test_a_missing_ico_falls_back_to_scaling_the_png(
+    monkeypatch: pytest.MonkeyPatch, qtbot
+) -> None:
+    """A build without the .ico still gets sharp small sizes."""
+    import bytesraw_erp.core.resources as res
+
+    real_read = res._read
+
+    def without_the_ico(name: str) -> bytes | None:
+        return None if name.endswith(".ico") else real_read(name)
+
+    monkeypatch.setattr(res, "_read", without_the_ico)
+    res.app_icon.cache_clear()
+    try:
+        sizes = {size.width() for size in res.app_icon().availableSizes()}
+        assert len(sizes) > 1
+        assert 16 in sizes
+    finally:
+        res.app_icon.cache_clear()
+
+
 def test_logo_lookup_is_cached(qtbot) -> None:
     """Called on every page build; re-decoding the PNG each time is waste."""
     assert logo_pixmap() is logo_pixmap()

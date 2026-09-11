@@ -24,8 +24,33 @@ from bytesraw_erp.ui.theme import ThemeController
 _log = logging.getLogger(__name__)
 
 
+#: Identity Windows groups taskbar buttons and pinned shortcuts under.
+_APP_USER_MODEL_ID = "BytesRaw.BytesrawERP"
+
+
+def _claim_windows_identity() -> None:
+    """Tell the Windows shell this process is Bytesraw ERP, not Python.
+
+    Without an explicit AppUserModelID the shell inherits the host
+    executable's - so a window whose icon is set correctly still shows the
+    Python launcher's icon in the taskbar, and pins itself as Python. Purely
+    cosmetic and entirely optional: any failure leaves the app running.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            _APP_USER_MODEL_ID
+        )
+    except (AttributeError, OSError) as exc:  # pragma: no cover - shell detail
+        _log.debug("Could not set the AppUserModelID: %s", exc)
+
+
 def build_application(argv: list[str] | None = None) -> QApplication:
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    _claim_windows_identity()
     app = QApplication(argv if argv is not None else sys.argv)
     # Drives QStandardPaths, so these must be set before any path is resolved.
     app.setApplicationName(APP_NAME)

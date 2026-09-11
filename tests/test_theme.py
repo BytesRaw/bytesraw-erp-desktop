@@ -86,6 +86,41 @@ def test_banner_text_is_legible(palette: Palette) -> None:
     assert contrast_ratio(palette.success, palette.success_bg) >= _MIN_CONTRAST
 
 
+def test_app_bar_text_is_legible_on_both_ends_of_its_gradient(palette: Palette) -> None:
+    """The bar is a gradient, so the darker stop has to pass too."""
+    assert contrast_ratio(palette.text, palette.app_bar) >= _MIN_CONTRAST
+    assert contrast_ratio(palette.text, palette.app_bar_edge) >= _MIN_CONTRAST
+
+
+def test_text_on_chips_and_hovers_is_legible(palette: Palette) -> None:
+    """Every pill in the app bar - nav group, company chip - uses these."""
+    assert contrast_ratio(palette.text, palette.chip) >= _MIN_CONTRAST
+    assert contrast_ratio(palette.text, palette.hover) >= _MIN_CONTRAST
+
+
+def test_the_version_badge_is_legible(palette: Palette) -> None:
+    """Small text on a tinted plate is the easiest thing here to get wrong."""
+    assert contrast_ratio(palette.accent, palette.accent_soft) >= _MIN_CONTRAST
+
+
+def test_a_section_badge_reads_against_its_plate(palette: Palette) -> None:
+    """Icons are strokes, so this is the ratio that decides if one is visible."""
+    assert contrast_ratio(palette.primary, palette.primary_soft) >= 3.0
+
+
+def test_the_native_control_tick_is_visible(palette: Palette) -> None:
+    """Qt paints a check box's tick white on QPalette.Accent, in both themes.
+
+    The dark palette's ``primary`` measures 2.2:1 against white, which is why
+    ``control_accent`` exists as a separate, darker colour.
+    """
+    assert contrast_ratio("#ffffff", palette.control_accent) >= _MIN_CONTRAST
+
+
+def test_the_avatar_initials_are_legible(palette: Palette) -> None:
+    assert contrast_ratio(palette.primary_text, palette.primary) >= _MIN_CONTRAST
+
+
 # -- palette / stylesheet shape ---------------------------------------------
 
 

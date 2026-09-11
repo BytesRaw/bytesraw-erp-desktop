@@ -52,11 +52,15 @@ class AccountsPage(QWidget):
         header.addStretch(1)
 
         add_button = QPushButton("Add account")
-        add_button.setIcon(icon("plus"))
+        # Explicitly the button's own foreground, not the theme's text colour:
+        # icons are stroked bitmaps, and a plum button with a near-black glyph
+        # on it is the same invisibility bug as dark text on a dark menu.
+        add_button.setIcon(icon("plus", context.theme.palette.primary_text))
         add_button.setIconSize(QSize(16, 16))
         add_button.setProperty("variant", "primary")
         add_button.clicked.connect(lambda: self._router.go(ROUTE_ACCOUNT_NEW))
         header.addWidget(add_button)
+        self._add_button = add_button
         layout.addLayout(header)
 
         self._banner = Banner()
@@ -80,6 +84,7 @@ class AccountsPage(QWidget):
         outer.addWidget(scroll)
 
         context.accounts_changed.connect(self.refresh)
+        context.theme.theme_changed.connect(self._on_theme_changed)
 
     # -- router hooks ------------------------------------------------------
 
@@ -89,6 +94,19 @@ class AccountsPage(QWidget):
             self._banner.show_error(notice)
         else:
             self._banner.clear_message()
+        self.refresh()
+
+    # -- theme -------------------------------------------------------------
+
+    def _on_theme_changed(self, palette: object) -> None:
+        """Re-render every icon on the page.
+
+        This page is kept alive across navigation, so its icons outlive the
+        theme they were stroked in. Rebuilding the cards is the cheapest way to
+        re-render theirs - the list is short, and it is already the path taken
+        whenever an account changes.
+        """
+        self._add_button.setIcon(icon("plus", palette.primary_text))  # type: ignore[attr-defined]
         self.refresh()
 
     # -- rendering ---------------------------------------------------------

@@ -17,10 +17,15 @@ login screen appears once per server rather than once per launch.
   restored on the next launch.
 - **Isolated sessions.** Each account gets its own browser profile and cookie
   jar, so two logins on the same server never collide.
-- **Native app bar.** Company logo and name, signed-in user, interface language
-  and navigation actions sit above the web view. The company is shown but not
-  changed here - Odoo's own menu owns that - and the language slot renders as
-  plain text when there is only one to choose from.
+- **Native app bar.** The product mark and build number, a segmented navigation
+  cluster, the active company, the signed-in user and the interface language sit
+  above the web view, on a surface of their own so the native chrome never reads
+  as part of the Odoo navbar below it. The company is shown but not changed here
+  - Odoo's own menu owns that - and the language slot renders as plain text when
+  there is only one to choose from.
+- **The build number is always on screen.** Next to the mark in the app bar, on
+  the account form, and in Settings under About, with the folders the app writes
+  to - the things support asks for first.
 - **Light and dark themes.** The theme is carried into Odoo itself where the
   server supports it.
 - **Download notifications.** A file saved from Odoo says so, with a shortcut to

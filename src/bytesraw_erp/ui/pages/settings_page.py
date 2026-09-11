@@ -1,4 +1,4 @@
-"""Application settings: appearance and printing.
+"""Application settings: appearance, printing, and what is stored where.
 
 Changes apply and save immediately. A settings page with a Save button invites
 the user to close it with unsaved edits; applying on change means the printer
@@ -7,18 +7,23 @@ they pick is the printer that prints, with no second step.
 Printing is configured here, once, rather than per account: which printer is
 attached is a fact about the machine in front of the user, not about the Odoo
 database they are signed in to.
+
+Each group is a card with a badged header, so the page reads as three decisions
+rather than one long list of controls. The About card is the honest home for
+the build number, the settings file and the folders the app writes to - the
+things a user is asked for when they report a problem.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFormLayout,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -27,40 +32,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bytesraw_erp.constants import APP_NAME, APP_VERSION
 from bytesraw_erp.core.errors import BytesrawError
+from bytesraw_erp.core.paths import logs_dir, reports_dir
 from bytesraw_erp.data.models import PrintMode, PrintSettings
 from bytesraw_erp.services.print_service import available_printers, default_printer_name
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
-from bytesraw_erp.ui.theme import Theme
+from bytesraw_erp.ui.theme import Palette, Theme
 from bytesraw_erp.ui.widgets.banner import Banner
+from bytesraw_erp.ui.widgets.sections import BrandHeader, Card, Field, SectionHeader, hint
 
 _log = logging.getLogger(__name__)
+
+_PAGE_WIDTH = 680
+#: A combo holding two words should not run the width of the card.
+_CONTROL_WIDTH = 240
+_WIDE_CONTROL = 420
 
 #: Stored as an empty printer name - resolved to whatever Windows says at print
 #: time, so the setting keeps following the OS default when the user changes it.
 _SYSTEM_DEFAULT = ""
-
-
-def _section(title: str) -> QLabel:
-    label = QLabel(title)
-    label.setObjectName("SectionTitle")
-    return label
-
-
-def _hint(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setObjectName("MutedLabel")
-    label.setWordWrap(True)
-    return label
-
-
-def _rule() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setFixedHeight(1)
-    line.setObjectName("Rule")
-    return line
 
 
 class SettingsPage(QWidget):
@@ -72,46 +64,36 @@ class SettingsPage(QWidget):
         self._router = router
         #: Guards the change handlers while fields are populated from storage.
         self._loading = False
+        #: Section badges are rendered bitmaps, and this is the one page where
+        #: the theme changes under the widget that is showing it.
+        self._sections: list[SectionHeader] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
         container = QWidget()
-        container.setMaximumWidth(680)
+        container.setMaximumWidth(_PAGE_WIDTH)
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 28, 24, 32)
-        layout.setSpacing(14)
+        layout.setContentsMargins(24, 32, 24, 32)
+        layout.setSpacing(18)
 
         header = QHBoxLayout()
-        title = QLabel("Settings")
-        title.setObjectName("PageTitle")
-        header.addWidget(title)
-        header.addStretch(1)
+        header.setSpacing(16)
+        header.addWidget(
+            BrandHeader("Settings", "Appearance and printing, for this computer."), 1
+        )
         self._close = QPushButton("Done")
         self._close.setProperty("variant", "primary")
         self._close.clicked.connect(self._on_done)
-        header.addWidget(self._close)
+        header.addWidget(self._close, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
 
         self._banner = Banner()
         layout.addWidget(self._banner)
 
-        layout.addWidget(_section("Appearance"))
-        layout.addLayout(self._build_appearance())
-        layout.addWidget(_rule())
-
-        layout.addWidget(_section("Printing"))
-        layout.addLayout(self._build_printing())
-        layout.addWidget(
-            _hint(
-                "These settings apply to every print from Odoo, including the "
-                "Print button on a report and a receipt calling window.print()."
-            )
-        )
-        layout.addWidget(_rule())
-        layout.addWidget(_section("Storage"))
-        self._storage_hint = _hint("")
-        layout.addWidget(self._storage_hint)
+        layout.addWidget(self._build_appearance_card())
+        layout.addWidget(self._build_printing_card())
+        layout.addWidget(self._build_about_card())
         layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -120,45 +102,62 @@ class SettingsPage(QWidget):
         scroll.setWidget(container)
         outer.addWidget(scroll)
 
+        context.theme.theme_changed.connect(self._apply_theme)
+        self._apply_theme(context.theme.palette)
+
     # -- construction ------------------------------------------------------
 
-    def _build_appearance(self) -> QFormLayout:
-        form = QFormLayout()
-        form.setSpacing(10)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    def _section(self, icon_name: str, title: str, description: str = "") -> SectionHeader:
+        header = SectionHeader(icon_name, title, description)
+        self._sections.append(header)
+        return header
+
+    def _build_appearance_card(self) -> Card:
+        card = Card()
+        card.body.addWidget(
+            self._section("palette", "Appearance", "How Bytesraw ERP and Odoo are painted.")
+        )
 
         self._theme = QComboBox()
+        self._theme.setMaximumWidth(_CONTROL_WIDTH)
         for option in (Theme.LIGHT, Theme.DARK):
             self._theme.addItem(option.label, option.value)
         self._theme.currentIndexChanged.connect(self._on_theme_changed)
-        form.addRow("Theme", self._theme)
+        self._theme_hint = hint("")
+        card.body.addWidget(Field("Theme", self._theme))
+        card.body.addWidget(self._theme_hint)
+        return card
 
-        self._theme_hint = _hint("")
-        form.addRow("", self._theme_hint)
-        return form
-
-    def _build_printing(self) -> QFormLayout:
-        form = QFormLayout()
-        form.setSpacing(10)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    def _build_printing_card(self) -> Card:
+        card = Card()
+        card.body.addWidget(
+            self._section(
+                "printer-cog",
+                "Printing",
+                "Applies to every print from Odoo, including a report's own "
+                "Print button and a receipt calling window.print().",
+            )
+        )
 
         self._mode = QComboBox()
+        self._mode.setMaximumWidth(_WIDE_CONTROL)
         for mode in (PrintMode.DIALOG, PrintMode.DIRECT, PrintMode.PREVIEW):
             self._mode.addItem(mode.label, mode.value)
         self._mode.currentIndexChanged.connect(self._on_printing_changed)
-        form.addRow("When Odoo prints", self._mode)
-        form.addRow(
-            "",
-            _hint(
+        card.body.addWidget(
+            Field(
+                "When Odoo prints",
+                self._mode,
                 "Windows' own print dialog has no preview pane, so choose "
                 "'Show a print preview first' if you want to see the pages "
-                "before they are printed."
-            ),
+                "before they are printed.",
+            )
         )
 
         self._printer = QComboBox()
+        self._printer.setMaximumWidth(_WIDE_CONTROL)
         self._printer.currentIndexChanged.connect(self._on_printing_changed)
-        form.addRow("Printer", self._printer)
+        card.body.addWidget(Field("Printer", self._printer))
 
         self._auto_print = QCheckBox("Print Odoo PDF reports as soon as they arrive")
         self._auto_print.setToolTip(
@@ -167,12 +166,52 @@ class SettingsPage(QWidget):
             "saving it."
         )
         self._auto_print.toggled.connect(self._on_printing_changed)
-        form.addRow("", self._auto_print)
+        card.body.addWidget(self._auto_print)
 
         self._keep_copy = QCheckBox("Also keep a copy in the Downloads folder")
         self._keep_copy.toggled.connect(self._on_printing_changed)
-        form.addRow("", self._keep_copy)
-        return form
+        card.body.addWidget(self._keep_copy)
+        return card
+
+    def _build_about_card(self) -> Card:
+        card = Card()
+        card.body.addWidget(
+            self._section("info", "About", "What this build is, and where it keeps things.")
+        )
+
+        version = QLabel(f"{APP_NAME} {APP_VERSION}")
+        version.setObjectName("AccountName")
+        card.body.addWidget(
+            Field("Version", version, "Quote this number when reporting a problem.")
+        )
+
+        self._storage_hint = hint("")
+        self._storage_hint.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        card.body.addWidget(Field("Stored on this computer", self._storage_hint))
+
+        folders = QHBoxLayout()
+        folders.setSpacing(8)
+        for title, path in (("Open logs", logs_dir()), ("Open reports", reports_dir())):
+            button = QPushButton(title)
+            button.clicked.connect(lambda _checked=False, p=path: self._open(p))
+            folders.addWidget(button)
+        folders.addStretch(1)
+        card.body.addLayout(folders)
+        return card
+
+    def _open(self, path: Path) -> None:
+        """Show a folder in Explorer. ``logs_dir`` and ``reports_dir`` both
+        create the directory themselves, so there is always one to open."""
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self._banner.show_error(f"Could not open {path}.")
+
+    # -- theme -------------------------------------------------------------
+
+    def _apply_theme(self, palette: Palette) -> None:
+        for section in self._sections:
+            section.apply_theme(palette)
 
     # -- router hooks ------------------------------------------------------
 
@@ -206,9 +245,7 @@ class SettingsPage(QWidget):
             self._auto_print.setChecked(settings.auto_print_reports)
             self._keep_copy.setChecked(settings.keep_report_copy)
             self._keep_copy.setEnabled(settings.auto_print_reports)
-            self._storage_hint.setText(
-                f"Settings are stored on this computer at\n{self._context.settings.path}"
-            )
+            self._storage_hint.setText(str(self._context.settings.path))
         finally:
             self._loading = False
 

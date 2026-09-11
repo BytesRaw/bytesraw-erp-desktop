@@ -25,6 +25,8 @@ from bytesraw_erp.ui.pages.accounts_page import AccountsPage
 from bytesraw_erp.ui.pages.odoo_page import OdooPage
 from bytesraw_erp.ui.pages.settings_page import SettingsPage
 from bytesraw_erp.ui.router import Router
+from bytesraw_erp.ui.theme import Palette
+from bytesraw_erp.ui.widgets.icons import set_icon_color
 
 _log = logging.getLogger(__name__)
 
@@ -39,6 +41,13 @@ class MainWindow(QMainWindow):
         self._context = context
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(*MIN_WINDOW_SIZE)
+
+        # Before any page is built: an icon is stroked in whatever colour was
+        # last set, and the default is the light palette's near-black. The app
+        # bar used to be the only caller, so a first launch straight into the
+        # account form under the dark theme drew every icon on it invisible -
+        # there is no app bar on that screen.
+        set_icon_color(context.theme.palette.text)
 
         stack = QStackedWidget(self)
         self.setCentralWidget(stack)
@@ -63,9 +72,10 @@ class MainWindow(QMainWindow):
         )
 
         self._restore_geometry()
-        # A stylesheet change does not re-polish children that were built
-        # before it; force it so an open page picks the new palette up.
-        context.theme.theme_changed.connect(self._repolish)
+        # Connected before any page exists, so this runs first on every theme
+        # change: the new icon colour is in place by the time a page's own
+        # handler re-renders its icons.
+        context.theme.theme_changed.connect(self._on_theme_changed)
 
     # -- startup -----------------------------------------------------------
 
@@ -82,6 +92,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, APP_NAME, str(exc))
             has_accounts = False
         self.router.reset_to(ROUTE_ODOO if has_accounts else ROUTE_ACCOUNT_NEW)
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        set_icon_color(palette.text)
+        self._repolish(palette)
 
     def _repolish(self, _palette: object) -> None:
         for widget in self.findChildren(QWidget):
