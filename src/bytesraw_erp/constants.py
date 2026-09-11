@@ -10,7 +10,7 @@ from typing import Final
 
 #: Window title and QApplication name.
 APP_NAME: Final[str] = "Bytesraw ERP"
-APP_VERSION: Final[str] = "0.1.6"
+APP_VERSION: Final[str] = "0.1.7"
 
 ORG_NAME: Final[str] = "BytesRaw"
 ORG_DOMAIN: Final[str] = "bytesraw.com"
@@ -42,6 +42,20 @@ RPC_DB_LIST: Final[str] = "/web/database/list"
 #: ``Content-Disposition: attachment`` header (``addons/web/controllers/report.py:138``),
 #: which QtWebEngine surfaces as a download. ``/report/pdf/`` is the inline form.
 REPORT_URL_PREFIXES: Final[tuple[str, ...]] = ("/report/download", "/report/pdf/")
+
+#: Odoo's own class name for an expired session, as ``serialize_exception``
+#: writes it into ``error.data.name`` (``odoo/http.py:349``). The accompanying
+#: ``error.code`` is 100 and ``error.message`` is "Odoo Session Expired", but
+#: only the class name is left untranslated, so that is what the client matches.
+SESSION_EXPIRED_NAME: Final[str] = "odoo.http.SessionExpiredException"
+#: The numeric code Odoo assigns the same fault (``odoo/http.py:2617``). Used
+#: only to corroborate the name, never on its own.
+SESSION_EXPIRED_CODE: Final[int] = 100
+
+#: How often the shell asks Odoo whether its session is still alive. Odoo's own
+#: ``get_session_info`` calls ``session.touch()``, so this doubles as a keepalive
+#: for a till left idle between customers.
+SESSION_PROBE_SECONDS: Final[int] = 5 * 60
 
 #: Model holding the per-user colour scheme. Present only when an addon adds it
 #: (e.g. ``ica_web_responsive``); absent on plain Odoo 19 Community.

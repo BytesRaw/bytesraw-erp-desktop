@@ -27,11 +27,20 @@ single active language the combo box is replaced by a plain label - not a
 disabled combo - because a disabled control reads as "you may not", while this
 case is "there is no alternative".
 
+No hidden default
+-----------------
+Both tool buttons open a menu and neither acts on its own. Printing used to be a
+split button whose icon half ran the configured mode; on a till set to print
+directly, a click aimed at the icon was a sheet of paper. The saved mode still
+governs the prints Odoo starts by itself, and the bar names it rather than
+running it.
+
 The window controls
 -------------------
 The app is full screen and has no title bar of its own, so minimise and close
 ride at the right-hand end of the bar - the corner they would have occupied
-anyway.
+anyway. A windowed launch adds a full-screen toggle between them; a full-screen
+one does not, because there is nothing to toggle.
 """
 
 from __future__ import annotations
@@ -106,7 +115,12 @@ class AppBar(QWidget):
     #: Open the settings page.
     settings_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        allow_full_screen: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("AppBar")
         self.setFixedHeight(APP_BAR_HEIGHT)
@@ -134,7 +148,7 @@ class AppBar(QWidget):
         layout.addWidget(self._separator())
         self._build_identity_section(layout)
         layout.addWidget(self._separator())
-        self._window_controls = WindowControls()
+        self._window_controls = WindowControls(allow_full_screen=allow_full_screen)
         layout.addWidget(self._window_controls)
 
         self.set_session(None)
@@ -193,20 +207,25 @@ class AppBar(QWidget):
         layout.addWidget(group)
 
     def _build_tools_section(self, layout: QHBoxLayout) -> None:
-        """Print and appearance controls.
+        """Print and appearance controls. Both open a menu; neither acts alone.
 
-        Both are split buttons: the icon runs the common action, the menu
-        offers the explicit choices. Printing needs two, because a POS till
-        wants paper immediately while an office user wants to pick a tray.
+        Printing used to be a split button whose icon half went straight to
+        whatever the settings said. That half is gone. The two halves of a
+        split button sit eight pixels apart, the icon is the part a pointer
+        aims at, and on a till configured to print directly the misfire costs
+        a sheet of paper and a trip to the printer. Every print from the bar
+        now costs one deliberate choice, and the modes are the menu's entries
+        rather than a default hidden behind an icon.
+
+        The keyboard keeps its shortcut - Ctrl+P is what a browser binds print
+        to and what muscle memory reaches for. The actions are added to the bar
+        itself as well as to the menu, because a :class:`QAction` shortcut only
+        fires while the action belongs to a widget in the active window, and
+        living in a menu that has never been opened is not that.
         """
         self._print_button = QToolButton()
         self._print_button.setIconSize(QSize(18, 18))
-        self._print_button.setToolTip(
-            "Print the page you are looking at (Ctrl+P).\n"
-            "Odoo reports print by themselves - see Settings."
-        )
-        self._print_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        self._print_button.clicked.connect(self._emit_default_print)
+        self._print_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._register_icon(self._print_button, "printer")
 
         print_menu = QMenu(self)
@@ -216,20 +235,31 @@ class AppBar(QWidget):
             lambda: self.print_requested.emit(PrintMode.DIRECT)
         )
         self._register_icon(self._print_direct_action, "printer")
+        self._print_preview_action = QAction("Print preview of this page...", self)
+        self._print_preview_action.triggered.connect(
+            lambda: self.print_requested.emit(PrintMode.PREVIEW)
+        )
+        self._register_icon(self._print_preview_action, "eye")
         self._print_dialog_action = QAction("Print this page with options...", self)
         self._print_dialog_action.setShortcut("Ctrl+Shift+P")
         self._print_dialog_action.triggered.connect(
             lambda: self.print_requested.emit(PrintMode.DIALOG)
         )
         self._register_icon(self._print_dialog_action, "printer-cog")
-        print_menu.addAction(self._print_direct_action)
-        print_menu.addAction(self._print_dialog_action)
+        for action in (
+            self._print_direct_action,
+            self._print_preview_action,
+            self._print_dialog_action,
+        ):
+            print_menu.addAction(action)
+            self.addAction(action)
         print_menu.addSeparator()
         printer_settings = QAction("Printer settings...", self)
         printer_settings.triggered.connect(self.settings_requested.emit)
         self._register_icon(printer_settings, "sliders")
         print_menu.addAction(printer_settings)
         self._print_button.setMenu(print_menu)
+        self.set_default_print_mode(self._default_print_mode)
         layout.addWidget(self._print_button)
 
         self._theme_button = QToolButton()
@@ -248,10 +278,6 @@ class AppBar(QWidget):
             self._theme_actions[option] = action
         self._theme_button.setMenu(theme_menu)
         layout.addWidget(self._theme_button)
-
-    def _emit_default_print(self) -> None:
-        """The button itself runs whatever this account is configured to do."""
-        self.print_requested.emit(self._default_print_mode)
 
     def _build_identity_section(self, layout: QHBoxLayout) -> None:
         self._language_label = QLabel()
@@ -356,12 +382,23 @@ class AppBar(QWidget):
     # -- printing ----------------------------------------------------------
 
     def set_default_print_mode(self, mode: PrintMode) -> None:
-        """Set what the print button itself does, from the saved settings."""
+        """Record the configured mode, and name it in the tooltip.
+
+        Nothing in the bar *runs* it any more - the button only opens its menu.
+        The setting still decides how a print Odoo starts by itself reaches
+        paper (``window.print()`` from a POS receipt, and a downloaded report),
+        so the bar says what it is rather than pretending it is not there.
+        """
         self._default_print_mode = mode
         self._print_button.setToolTip(
-            f"Print the page you are looking at - {mode.label.lower()}.\n"
-            "Odoo reports print by themselves - see Settings."
+            "Print the page you are looking at - choose how, from the menu.\n"
+            f"Odoo's own prints use the saved setting: {mode.label.lower()}."
         )
+
+    @property
+    def window_controls(self) -> WindowControls:
+        """The caption buttons, so the window can keep the toggle honest."""
+        return self._window_controls
 
     def set_print_enabled(self, enabled: bool) -> None:
         self._print_button.setEnabled(enabled)

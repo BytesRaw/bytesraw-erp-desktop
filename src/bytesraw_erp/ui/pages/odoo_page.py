@@ -4,6 +4,29 @@ Sign-in happens over JSON-RPC, not by driving the HTML login form. The
 resulting ``session_id`` cookie is planted into this account's QtWebEngine
 profile, so the browser surface opens already authenticated and the RPC client
 and the embedded client share one Odoo session.
+
+Session expiry
+--------------
+Because the two clients share one session, they also lose it together, and
+either one can be the first to notice:
+
+* the **web view** is redirected to ``/web/login``. Odoo's HTTP dispatcher
+  answers an expired session that way (``odoo/http.py:2516``), so this is what
+  a user sitting in front of the app actually sees first;
+* an **RPC call** comes back with ``odoo.http.SessionExpiredException``, which
+  :class:`~bytesraw_erp.services.odoo_client.OdooClient` raises as
+  :class:`OdooSessionExpired`;
+* nothing at all happens, because the till has been idle. A probe every
+  ``SESSION_PROBE_SECONDS`` covers that case and, since Odoo's
+  ``get_session_info`` calls ``session.touch()``, doubles as the keepalive that
+  stops the session expiring in the first place.
+
+All three funnel into :meth:`OdooPage._recover_session`, which signs in again
+with the password already in the vault and puts the user back on the page they
+were on. Nothing is asked of them: the credentials have not changed, only the
+server's memory of the session has. The one thing that must not happen is a
+loop - a server that keeps refusing gets one attempt, after which the failure
+is shown like any other.
 """
 
 from __future__ import annotations
@@ -12,7 +35,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QUrl
+from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QLabel,
@@ -25,11 +48,17 @@ from PySide6.QtWidgets import (
 
 from bytesraw_erp.constants import (
     ODOO_HOME_PATH,
+    ODOO_LOGIN_PATH,
     ROUTE_ACCOUNT_NEW,
     ROUTE_ACCOUNTS,
     ROUTE_SETTINGS,
+    SESSION_PROBE_SECONDS,
 )
-from bytesraw_erp.core.errors import BytesrawError, OdooCredentialsRejected
+from bytesraw_erp.core.errors import (
+    BytesrawError,
+    OdooCredentialsRejected,
+    OdooSessionExpired,
+)
 from bytesraw_erp.core.paths import downloads_dir
 from bytesraw_erp.data.models import Account, PrintMode, SessionContext
 from bytesraw_erp.services.print_service import PrintError
@@ -37,6 +66,7 @@ from bytesraw_erp.services.session_service import (
     apply_odoo_color_scheme,
     build_session_context,
     open_session,
+    probe_session,
     set_user_language,
 )
 from bytesraw_erp.services.tasks import run_async
@@ -60,12 +90,34 @@ class OdooPage(QWidget):
         self._router = router
         self._web: OdooWebView | None = None
         self._web_account_id: str | None = None
+        #: True while a silent re-authentication is running, so the three
+        #: detectors cannot each start one for the same expiry.
+        self._recovering = False
+        #: The last Odoo path the user was actually on. Tracked here rather
+        #: than read back from the account registry: the store hands out fresh
+        #: copies, so the adopted ``Account`` goes stale the moment a path is
+        #: remembered.
+        self._last_path: str | None = None
+        #: Where to return once the session is back.
+        self._resume_path: str | None = None
+        #: One silent retry per expiry. A server that answers the re-login with
+        #: another expired session is not going to be fixed by a third attempt,
+        #: and a page that keeps signing itself in is a page in a loop.
+        self._recovery_spent = False
+
+        #: Liveness probe and keepalive in one. Started when a session is
+        #: adopted, stopped whenever there is none - a timer firing RPC calls
+        #: at a signed-out app would resurrect the status panel behind the
+        #: account list.
+        self._probe = QTimer(self)
+        self._probe.setInterval(SESSION_PROBE_SECONDS * 1000)
+        self._probe.timeout.connect(self._probe_session)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._app_bar = AppBar()
+        self._app_bar = AppBar(allow_full_screen=context.windowed)
         layout.addWidget(self._app_bar)
         self._connect_app_bar()
 
@@ -159,6 +211,8 @@ class OdooPage(QWidget):
         def done(result: object) -> None:
             client, session = result  # type: ignore[misc]
             self._context.adopt_session(account, client, session)
+            self._recovery_spent = False
+            self._probe.start()
             self._show_web(account, reload_home=True)
 
         run_async(open_session, account, password, on_success=done, on_error=self._on_auth_failed)
@@ -204,6 +258,104 @@ class OdooPage(QWidget):
             self._context.post_notice(notice)
             self._router.reset_to(ROUTE_ACCOUNTS)
 
+    # -- session expiry ----------------------------------------------------
+
+    def _probe_session(self) -> None:
+        """Ask Odoo whether the session is still there, and touch it if it is.
+
+        Deliberately silent in both directions: a probe that succeeds shows
+        nothing, and one that fails on the network shows nothing either - the
+        till may simply be between access points, and the next probe will say
+        so. Only an answer that the *session* is gone is acted on.
+        """
+        client = self._context.client
+        if client is None or self._recovering:
+            return
+
+        def failed(exc: Exception) -> None:
+            if isinstance(exc, OdooSessionExpired):
+                self._recover_session("Odoo signed this session out.")
+            else:
+                _log.debug("Session probe could not reach the server: %s", exc)
+
+        run_async(probe_session, client, on_error=failed)
+
+    def _on_session_expired(self, exc: Exception) -> bool:
+        """Route an expired-session fault from an RPC call into recovery.
+
+        Returns whether it handled ``exc``, so a caller's own error branch can
+        step aside rather than showing a message about a session that is
+        already being replaced.
+        """
+        if not isinstance(exc, OdooSessionExpired):
+            return False
+        self._recover_session(str(exc))
+        return True
+
+    def _recover_session(self, reason: str) -> None:
+        """Sign in again with the stored password, without asking the user.
+
+        The details in the vault are still correct - the server has forgotten
+        the session, not rejected the account - so there is nothing to ask.
+        What the user gets is the page they were on, reloaded, and a toast
+        saying it happened, because silently re-authenticating with no trace at
+        all is indistinguishable from a page that simply refreshed itself.
+        """
+        account = self._context.account or self._context.store.active
+        if account is None or self._recovering:
+            return
+        if self._recovery_spent:
+            _log.warning("Session expired again straight after a recovery; giving up")
+            self._show_error(
+                "The Odoo session keeps expiring. Sign in again from "
+                "'Manage accounts', or check the server's session settings."
+            )
+            return
+
+        try:
+            password = self._context.store.get_password(account.id)
+        except BytesrawError as exc:
+            self._show_error(str(exc))
+            return
+        if not password:
+            # Nothing to sign in with. The form is the only honest destination.
+            self._router.go(f"/accounts/{account.id}/edit")
+            return
+
+        _log.info("Re-authenticating %s silently: %s", account.name, reason)
+        self._recovering = True
+        self._recovery_spent = True
+        self._probe.stop()
+        # The redirect to /web/login is already on its way; `_last_path` is
+        # the last place the user actually chose, because the login path is
+        # never recorded there.
+        self._resume_path = self._resume_path or self._last_path
+
+        def done(result: object) -> None:
+            client, session = result  # type: ignore[misc]
+            self._recovering = False
+            self._context.adopt_session(account, client, session)
+            self._probe.start()
+            self._resume()
+            self._toasts.show_message("Signed back in to Odoo.")
+
+        def failed(exc: Exception) -> None:
+            self._recovering = False
+            self._on_auth_failed(exc)
+
+        run_async(open_session, account, password, on_success=done, on_error=failed)
+
+    def _resume(self) -> None:
+        """Put the web view back where the user was, on the new session."""
+        path, self._resume_path = self._resume_path, None
+        if self._web is None:
+            account = self._context.account
+            if account is not None:
+                self._show_web(account, reload_home=True)
+            return
+        self._web.open_path(path or ODOO_HOME_PATH)
+        self._stack.setCurrentWidget(self._web)
+
     # -- web surface -------------------------------------------------------
 
     def _show_web(self, account: Account, *, reload_home: bool = False) -> None:
@@ -240,10 +392,26 @@ class OdooPage(QWidget):
         self._app_bar.set_default_print_mode(self._context.settings.printing.mode)
 
     def _on_path_changed(self, path: str) -> None:
-        """Remember where the user is so the next launch resumes there."""
+        """Remember where the user is, and notice when Odoo bounces them out.
+
+        A redirect to ``/web/login`` is how an expired session reaches a
+        browser: Odoo's dispatcher logs the session out and redirects there
+        (``odoo/http.py:2516``). It is also the first thing the *user* sees, so
+        it is the detector that matters most - the RPC probe may be four
+        minutes away.
+
+        That path is never remembered as somewhere to resume, either. Storing
+        it would make the login screen the landing page on the next launch.
+        """
         account = self._context.account or self._context.store.active
         if account is None or not path.startswith("/"):
             return
+
+        if path.startswith(ODOO_LOGIN_PATH):
+            self._recover_session("Odoo redirected the web view to its login page.")
+            return
+
+        self._last_path = path
         try:
             self._context.store.remember_path(account.id, path)
         except BytesrawError as exc:
@@ -287,6 +455,8 @@ class OdooPage(QWidget):
 
         def failed(exc: Exception) -> None:
             self._app_bar.set_session(session)  # roll the combo back
+            if self._on_session_expired(exc):
+                return
             self._show_error(str(exc))
 
         run_async(apply, on_success=done, on_error=failed)
@@ -295,14 +465,33 @@ class OdooPage(QWidget):
         account = self._context.account
         if account is not None:
             self._context.profiles.clear_session(account)
+        self._probe.stop()
+        self._recovering = False
+        self._resume_path = None
         self._context.release_session()
         self._app_bar.set_session(None)
-        if self._web is not None:
-            self._stack.removeWidget(self._web)
-            self._web.deleteLater()
-            self._web = None
-            self._web_account_id = None
+        self._release_web()
         self._router.reset_to(ROUTE_ACCOUNTS)
+
+    def _release_web(self) -> None:
+        if self._web is None:
+            return
+        self._web.stop()
+        self._stack.removeWidget(self._web)
+        self._web.deleteLater()
+        self._web = None
+        self._web_account_id = None
+
+    def release(self) -> None:
+        """Drop the web view, on the way out of the application.
+
+        Called by the window before it frees the profiles, because a profile
+        released while a page still holds it takes the process down. Stopping
+        the probe here matters as much: a timer that fires during teardown
+        submits an RPC call nobody will be alive to hear the answer to.
+        """
+        self._probe.stop()
+        self._release_web()
 
     # -- theme -------------------------------------------------------------
 

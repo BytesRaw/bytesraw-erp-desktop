@@ -12,6 +12,7 @@ the only reference and pages borrow it.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import Mapping
@@ -139,6 +140,30 @@ class ProfileManager(QObject):
         self._profiles[account.id] = profile
         _log.info("Created web profile for account %s", account.id)
         return profile
+
+    def shutdown(self) -> None:
+        """Release every profile, on the way out of the application.
+
+        Must run **after** the pages that borrow these profiles are gone - a
+        profile freed while a page still holds it takes the process with it.
+        :meth:`bytesraw_erp.ui.main_window.MainWindow.closeEvent` guarantees
+        that order.
+
+        The interceptor is detached first: it is a Python object QtWebEngine
+        calls into from the IO thread, and a request still in flight during
+        teardown would otherwise reach an object that is being collected.
+        Releasing here rather than leaving it to interpreter shutdown also puts
+        Chromium's flush of its cookie jar and disk cache on the close path,
+        where the window has already been hidden, instead of after it.
+        """
+        for account_id, profile in self._profiles.items():
+            profile.setUrlRequestInterceptor(None)
+            with contextlib.suppress(RuntimeError):  # already disconnected
+                profile.downloadRequested.disconnect(self._on_download_requested)
+            _log.debug("Released web profile for account %s", account_id)
+            profile.deleteLater()
+        self._profiles.clear()
+        self._watchers.clear()
 
     def forget(self, account_id: str) -> None:
         """Drop a profile when its account is deleted."""

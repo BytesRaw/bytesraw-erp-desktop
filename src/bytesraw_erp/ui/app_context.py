@@ -19,6 +19,7 @@ from bytesraw_erp.data.settings_store import SettingsStore
 from bytesraw_erp.services.odoo_client import OdooClient
 from bytesraw_erp.services.print_service import PrintService
 from bytesraw_erp.services.profile_manager import ProfileManager
+from bytesraw_erp.services.tasks import shutdown as shutdown_tasks
 from bytesraw_erp.ui.theme import ThemeController
 
 _log = logging.getLogger(__name__)
@@ -32,8 +33,21 @@ class AppContext(QObject):
     #: Emitted with the new :class:`SessionContext` after a successful sign-in.
     session_changed = Signal(object)
 
-    def __init__(self, theme: ThemeController, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        theme: ThemeController,
+        parent: QObject | None = None,
+        *,
+        windowed: bool = False,
+    ) -> None:
         super().__init__(parent)
+        #: True when the app was launched with ``--windowed``. The shell is a
+        #: full-screen till by default; this is the escape hatch for a
+        #: developer or a back-office machine that needs the desktop as well,
+        #: and it is what puts a full-screen toggle in the caption buttons.
+        #: Lives here because the app bar has to know too, and it is built
+        #: inside a page that only ever sees this context.
+        self.windowed = windowed
         self.store = AccountStore()
         self.profiles = ProfileManager(self)
         self.printing = PrintService(self)
@@ -96,7 +110,20 @@ class AppContext(QObject):
         self._account = None
 
     def shutdown(self) -> None:
+        """Release everything, in the order the teardown has to happen in.
+
+        Background work first: a queued RPC call that lands after this point
+        has nothing left to deliver to, and Qt's global thread pool is waited
+        on at process exit - so a job accepted now is time the user spends
+        watching a window that has already gone.
+
+        Profiles last, and only after the pages holding them have released
+        their web views, which :class:`~bytesraw_erp.ui.main_window.MainWindow`
+        arranges. Idempotent: the close path and ``aboutToQuit`` both call it.
+        """
+        shutdown_tasks()
         self.release_session()
+        self.profiles.shutdown()
 
     def landing_route(self) -> str:
         """Where "done" and "back to the app" should go.

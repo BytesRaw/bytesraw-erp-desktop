@@ -127,6 +127,17 @@ _PATHS: dict[str, str] = {
     # navigation icons instead of reading as a foreign caption strip.
     "minimize": '<path d="M5 12h14"/>',
     "close": '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
+    # Corner brackets rather than the hollow square Windows uses for maximise:
+    # this control enters *full screen*, which is not the same promise, and the
+    # brackets are the convention for it everywhere a video player lives.
+    "full-screen": (
+        '<path d="M9 4H4v5"/><path d="M15 4h5v5"/>'
+        '<path d="M9 20H4v-5"/><path d="M15 20h5v-5"/>'
+    ),
+    "exit-full-screen": (
+        '<path d="M4 9h5V4"/><path d="M20 9h-5V4"/>'
+        '<path d="M4 15h5v5"/><path d="M20 15h-5v5"/>'
+    ),
 }
 
 _TEMPLATE = (

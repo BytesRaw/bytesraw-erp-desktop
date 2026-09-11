@@ -95,6 +95,22 @@ def open_session(account: Account, password: str) -> tuple[OdooClient, SessionCo
         raise
 
 
+def probe_session(client: OdooClient) -> None:
+    """Check that ``client``'s Odoo session is still live - and keep it alive.
+
+    Raises :class:`~bytesraw_erp.core.errors.OdooSessionExpired` when the server
+    has forgotten the session, and :class:`OdooConnectionError` when it cannot
+    be reached at all. The caller must tell those apart: the first needs a new
+    sign-in, the second needs nothing but patience.
+
+    ``/web/session/get_session_info`` is the probe because it is cheap,
+    ``auth='user'`` (so an expired session cannot answer it), and calls
+    ``request.session.touch()`` - which pushes the inactivity clock back and
+    stops a till that is idle between customers from expiring at all.
+    """
+    client.session_info()
+
+
 def set_user_language(client: OdooClient, uid: int, code: str) -> None:
     """Change the user's language the same way Odoo's own switcher does."""
     client.call_kw("res.users", "write", [[uid], {"lang": code}])

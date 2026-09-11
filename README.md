@@ -59,6 +59,14 @@ press **Load** to list the databases it exposes; servers that hide their
 database list simply need the name typed in. Saving authenticates first, so an
 account is never stored with credentials that do not work.
 
+The shell runs full screen, with its own minimise and close buttons in place of
+a title bar. Add `--windowed` to launch it in an ordinary resizable window
+instead - the caption buttons then also carry a full-screen toggle, as does F11.
+
+```bash
+.venv/Scripts/python.exe run.py --windowed
+```
+
 ## How sign-in works
 
 The app authenticates over Odoo's JSON-RPC endpoint and then plants the
@@ -66,6 +74,13 @@ resulting `session_id` cookie into that account's browser profile. The embedded
 client therefore opens already signed in, sharing one Odoo session with the RPC
 client rather than logging in twice. Credentials are never typed into the HTML
 login form.
+
+Because both clients share that session, they also lose it together. When the
+server forgets it - a restart, a cleared session store, a long idle spell - the
+app signs in again by itself with the password already in the vault and returns
+to the page you were on. A probe every five minutes both notices an expiry a
+navigation has not yet revealed and, because Odoo touches the session when it
+answers, keeps an idle till from expiring in the first place.
 
 ## Printing
 

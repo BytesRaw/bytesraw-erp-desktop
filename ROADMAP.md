@@ -97,11 +97,30 @@ Delivered after v0.1.0 on direct request.
       the per-session logo round trip. This shell does not take part in
       multi-company at all
 
+## v0.1.7 - Closing, windowing, printing `[x]`
+
+- [x] **M1.42** Closing is immediate: the window hides before the teardown, the
+      pages release their web views before the profiles are freed, and the
+      background pool stops accepting work rather than being waited on at
+      process exit. The queued full-screen correction no longer resurrects a
+      window that is on its way down
+- [x] **M1.43** `--windowed` launches the shell in an ordinary resizable
+      window, and only then do the caption buttons carry a full-screen toggle
+      (F11 as well). The full-screen default still has exactly one size
+- [x] **M1.44** The app bar's print button opens its menu and nothing else. The
+      split button's action half - which printed straight to paper on a till
+      configured that way, from a click aimed at the icon - is gone, and the
+      menu gained the preview mode it was missing
+
 ## v0.2.0 - Robustness `[ ]`
 
 The app survives the things a real deployment does to it.
 
-- [ ] **M2.1** Session expiry detection and silent re-authentication
+- [x] **M2.1** Session expiry detection and silent re-authentication. Three
+      detectors - the web view redirected to `/web/login`, an RPC fault of
+      `odoo.http.SessionExpiredException`, and a five-minute probe that doubles
+      as a keepalive - all recover by signing in again with the password
+      already in the vault, once per expiry, landing back on the same page
 - [ ] **M2.2** Offline / server-unreachable screen with retry
 - [ ] **M2.3** Two-factor authentication: fall back to the HTML login form in-view
 - [ ] **M2.4** Certificate-error UX (trust-once prompt instead of a config checkbox only)

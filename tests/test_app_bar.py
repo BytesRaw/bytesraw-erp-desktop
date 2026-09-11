@@ -8,10 +8,11 @@ Neither raises - both just look wrong - so they are pinned here.
 from __future__ import annotations
 
 import pytest
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QFrame, QLabel, QToolButton
 
 from bytesraw_erp.constants import APP_VERSION
-from bytesraw_erp.data.models import Company, Language, SessionContext
+from bytesraw_erp.data.models import Company, Language, PrintMode, SessionContext
 from bytesraw_erp.ui.theme import DARK, LIGHT, Theme
 from bytesraw_erp.ui.widgets.app_bar import AppBar, _initials
 from bytesraw_erp.ui.widgets.window_controls import WindowControls
@@ -148,3 +149,62 @@ def test_menu_actions_are_among_the_repainted_targets(bar: AppBar) -> None:
     from PySide6.QtGui import QAction
 
     assert any(isinstance(target, QAction) for target, _ in bar._icon_targets)
+
+
+# -- printing ----------------------------------------------------------------
+
+
+def test_the_print_button_only_opens_its_menu(bar: AppBar) -> None:
+    """The split button's action half is gone, and must not come back.
+
+    Its two halves were eight pixels apart, and on a till configured to print
+    directly a misaimed click put a page through the printer with no dialog to
+    stop it. Every print from the bar now costs a deliberate choice.
+    """
+    # InstantPopup is Qt's "this button has no action of its own": pressing it
+    # drops the menu and nothing else. Deliberately not asserted by clicking -
+    # the menu opens modally and a test that clicks never returns.
+    assert (
+        bar._print_button.popupMode()
+        is QToolButton.ToolButtonPopupMode.InstantPopup
+    )
+    assert bar._print_button.defaultAction() is None
+    menu = bar._print_button.menu()
+    assert menu is not None
+    assert [action.text() for action in menu.actions() if not action.isSeparator()] == [
+        "Print this page",
+        "Print preview of this page...",
+        "Print this page with options...",
+        "Printer settings...",
+    ]
+
+
+def test_every_mode_is_an_entry_in_the_menu(bar: AppBar) -> None:
+    """The modes are the menu, rather than one of them hiding behind an icon."""
+    fired: list[PrintMode] = []
+    bar.print_requested.connect(fired.append)
+
+    bar._print_direct_action.trigger()
+    bar._print_preview_action.trigger()
+    bar._print_dialog_action.trigger()
+
+    assert fired == [PrintMode.DIRECT, PrintMode.PREVIEW, PrintMode.DIALOG]
+
+
+def test_ctrl_p_can_actually_reach_the_action(bar: AppBar) -> None:
+    """A QAction shortcut only fires while the action belongs to a widget.
+
+    Living in a menu that has never been opened is not that, so the actions are
+    added to the bar as well - which is the whole reason Ctrl+P works now that
+    the button no longer prints.
+    """
+    assert bar._print_direct_action in bar.actions()
+    assert bar._print_direct_action.shortcut() == QKeySequence("Ctrl+P")
+
+
+def test_the_configured_mode_is_named_rather_than_run(bar: AppBar) -> None:
+    """Nothing in the bar runs it; Odoo's own prints still do."""
+    bar.set_default_print_mode(PrintMode.DIRECT)
+    tooltip = bar._print_button.toolTip()
+    assert "choose how" in tooltip
+    assert PrintMode.DIRECT.label.lower() in tooltip

@@ -29,6 +29,8 @@ from bytesraw_erp.constants import (
     RPC_SESSION_INFO,
     RPC_TIMEOUT,
     SESSION_COOKIE,
+    SESSION_EXPIRED_CODE,
+    SESSION_EXPIRED_NAME,
     USER_SETTINGS_MODEL,
 )
 from bytesraw_erp.core.errors import (
@@ -37,6 +39,7 @@ from bytesraw_erp.core.errors import (
     OdooConnectionError,
     OdooCredentialsRejected,
     OdooRpcError,
+    OdooSessionExpired,
 )
 
 _log = logging.getLogger(__name__)
@@ -101,14 +104,34 @@ class OdooClient:
         return body.get("result")
 
     @staticmethod
-    def _as_rpc_error(error: dict[str, Any]) -> OdooRpcError:
+    def _as_rpc_error(error: dict[str, Any]) -> BytesrawError:
+        """Turn a JSON-RPC ``error`` member into a typed exception.
+
+        An expired session is singled out here rather than at each call site,
+        because every authenticated endpoint can answer with it and the
+        recovery is the same everywhere: sign in again with the password
+        already in the vault. Matched on ``data.name`` - Odoo translates
+        ``message``, so "Odoo Session Expired" is not there on an Arabic
+        server, and the same trap as the login refusals above.
+        """
         data = error.get("data") or {}
         message = data.get("message") or error.get("message") or "Unknown Odoo error"
         name = data.get("name")
+        try:
+            code = int(error.get("code") or 0)
+        except (TypeError, ValueError):
+            code = 0
+
+        if name == SESSION_EXPIRED_NAME or code == SESSION_EXPIRED_CODE:
+            return OdooSessionExpired(
+                "The Odoo session has expired. Signing in again..."
+            )
+
         return OdooRpcError(
             str(message).strip(),
             debug=data.get("debug"),
             name=str(name) if name else None,
+            code=code,
         )
 
     # -- endpoints ---------------------------------------------------------
@@ -181,10 +204,17 @@ class OdooClient:
         return exc
 
     def session_info(self) -> dict[str, Any]:
-        """Refresh ``session_info`` for the already-authenticated session."""
+        """Refresh ``session_info`` for the already-authenticated session.
+
+        Doubles as the liveness probe. ``/web/session/get_session_info`` is
+        declared ``auth='user'`` and calls ``request.session.touch()``
+        (``addons/web/controllers/session.py:25``), so a call either raises
+        :class:`OdooSessionExpired` or pushes the session's idle clock back -
+        exactly what a till left alone between customers needs.
+        """
         result = self._rpc(RPC_SESSION_INFO, {})
         if not result:
-            raise OdooAuthError("The Odoo session has expired.")
+            raise OdooSessionExpired("The Odoo session has expired.")
         return result
 
     def call_kw(

@@ -12,6 +12,11 @@ carry no app bar - the account list, the account form, the settings page - get
 the floating set this window owns, because a first launch with no saved account
 lands on the account form, and a screen with no way to quit the application is
 not a screen this app is allowed to show.
+
+Launching with ``--windowed`` suspends all of that: the window keeps its frame,
+keeps its taskbar button, and the caption buttons grow a full-screen toggle,
+because in that mode the window really does have two sizes. That is the only
+configuration in which the toggle exists - see :mod:`.widgets.window_controls`.
 """
 
 from __future__ import annotations
@@ -19,8 +24,9 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QResizeEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QMainWindow,
@@ -53,6 +59,10 @@ _log = logging.getLogger(__name__)
 #: Gap between the floating window controls and the top-right corner.
 _OVERLAY_MARGIN = 14
 
+#: Size the windowed launch opens at, before the user resizes it. Wide enough
+#: for Odoo's own navbar not to collapse into its burger menu.
+_WINDOWED_SIZE = (1440, 900)
+
 
 class MainWindow(QMainWindow):
     """Hosts the router. All navigation happens inside one full-screen window."""
@@ -61,6 +71,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._context = context
         self.setWindowTitle(APP_NAME)
+        #: Set the moment a close is accepted. Everything that could re-show
+        #: the window, or start work whose result nobody will be alive to
+        #: receive, checks it first.
+        self._closing = False
 
         # Before any page is built: an icon is stroked in whatever colour was
         # last set, and the default is the light palette's near-black. The app
@@ -93,6 +107,12 @@ class MainWindow(QMainWindow):
 
         self._overlay = self._build_overlay()
         self.router.route_changed.connect(lambda _path: self._sync_overlay())
+
+        if context.windowed:
+            self.resize(*_WINDOWED_SIZE)
+            # F11 is the only shortcut a full-screen toggle is ever bound to,
+            # and a user who found the button will try it.
+            QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_full_screen)
 
         # Connected before any page exists, so this runs first on every theme
         # change: the new icon colour is in place by the time a page's own
@@ -132,7 +152,9 @@ class MainWindow(QMainWindow):
         """Put the window straight back into full screen if anything leaves it.
 
         Alt+Tab, a shell command or Qt itself can drop the flag; minimising is
-        the one departure that is allowed, because the app bar offers it.
+        the one departure that is allowed, because the app bar offers it. A
+        windowed launch opts out of the whole mechanism - there the user owns
+        the size.
 
         The correction is queued rather than applied here: calling
         ``showFullScreen`` from inside the state change that triggered it
@@ -141,15 +163,46 @@ class MainWindow(QMainWindow):
         normal.
         """
         super().changeEvent(event)
-        if event.type() is QEvent.Type.WindowStateChange:
+        if event.type() is not QEvent.Type.WindowStateChange:
+            return
+        self._sync_full_screen_controls()
+        if not self._context.windowed:
             QTimer.singleShot(0, self._enforce_full_screen)
 
     def _enforce_full_screen(self) -> None:
+        # The queued correction can outlive the click that closed the window.
+        # Without this guard `showFullScreen` puts a window that is on its way
+        # out back on screen, and the close has to be asked for twice.
+        if self._closing or self._context.windowed:
+            return
         state = self.windowState()
         if state & Qt.WindowState.WindowMinimized:
             return
         if not (state & Qt.WindowState.WindowFullScreen):
             self.showFullScreen()
+
+    def _toggle_full_screen(self) -> None:
+        """F11, and the caption button's twin. Windowed launches only."""
+        if not self._context.windowed:
+            return
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+        self._sync_full_screen_controls()
+
+    def _sync_full_screen_controls(self) -> None:
+        """Point every toggle on screen at the state it will move the window to.
+
+        There are two sets - the app bar's and the floating overlay's - and
+        full screen can also be left by F11 or by the shell, so neither can
+        rely on having been the thing that changed it.
+        """
+        # Swept rather than addressed: the overlay's set is a child of this
+        # window and the app bar's is buried in a page, and a state change can
+        # arrive before either exists.
+        for controls in self.findChildren(WindowControls):
+            controls.sync_full_screen()
 
     # -- floating window controls ------------------------------------------
 
@@ -166,7 +219,9 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(frame)
         row.setContentsMargins(5, 5, 5, 5)
         row.setSpacing(0)
-        self._overlay_controls = WindowControls()
+        self._overlay_controls = WindowControls(
+            allow_full_screen=self._context.windowed
+        )
         row.addWidget(self._overlay_controls)
         self._overlay_controls.apply_theme(self._context.theme.palette)
         frame.hide()
@@ -195,5 +250,46 @@ class MainWindow(QMainWindow):
     # -- shutdown ----------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        """Go away immediately, then tear down.
+
+        The order here is the whole point, and it is what the close button was
+        missing. Closing used to run the teardown first and leave the window on
+        screen throughout it, so the app looked hung for as long as an RPC call
+        in flight, a page still holding a web view and Chromium's flush of its
+        cookie jar took between them.
+
+        Now:
+
+        1. ``_closing`` is raised, so the queued full-screen correction cannot
+           put the window back up while it is going down;
+        2. every page releases its web view - profiles must outlive their
+           pages, so this has to happen before the profiles are freed;
+        3. the window hides, which is the frame the user actually waits for;
+        4. the context shuts down - background work, session, profiles.
+        5. the application is told to quit explicitly, rather than left to
+           notice that its last window went.
+        """
+        self._closing = True
+        self._release_pages()
+        self.hide()
         self._context.shutdown()
         super().closeEvent(event)
+        instance = QApplication.instance()
+        if instance is not None:
+            instance.quit()
+
+    def _release_pages(self) -> None:
+        """Ask every built page to drop what it holds open.
+
+        Only the Odoo page has anything - its web view - but the hook is
+        looked up by name so a later page can join in without this method
+        learning about it.
+        """
+        for index in range(self._stack.count()):
+            page = self._stack.widget(index)
+            release = getattr(page, "release", None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:  # pragma: no cover - never block a close
+                    _log.exception("A page failed to release cleanly")

@@ -27,6 +27,24 @@ _log = logging.getLogger(__name__)
 #: Identity Windows groups taskbar buttons and pinned shortcuts under.
 _APP_USER_MODEL_ID = "BytesRaw.BytesrawERP"
 
+#: Launch the shell in an ordinary resizable window instead of full screen.
+#: A till wants the full-screen default; a developer, and a back-office machine
+#: that also runs something else, want the desktop back. Only in this mode does
+#: the window carry a full-screen toggle - see
+#: :mod:`bytesraw_erp.ui.widgets.window_controls`.
+_WINDOWED_FLAGS = ("--windowed", "-w")
+
+
+def _take_windowed_flag(argv: list[str]) -> tuple[list[str], bool]:
+    """Split the flag out of ``argv`` before Qt ever sees it.
+
+    Qt parses its own switches out of the argument vector it is handed and
+    warns about what it does not recognise, so the app's flags are removed
+    here rather than left for it to complain about.
+    """
+    remaining = [arg for arg in argv if arg not in _WINDOWED_FLAGS]
+    return remaining, len(remaining) != len(argv)
+
 
 def _claim_windows_identity() -> None:
     """Tell the Windows shell this process is Bytesraw ERP, not Python.
@@ -67,20 +85,31 @@ def build_application(argv: list[str] | None = None) -> QApplication:
 
 
 def run(argv: list[str] | None = None) -> int:
-    app = build_application(argv)
+    arguments, windowed = _take_windowed_flag(
+        list(argv if argv is not None else sys.argv)
+    )
+    app = build_application(arguments)
     setup_logging()
-    _log.info("Starting %s %s", APP_NAME, APP_VERSION)
+    _log.info(
+        "Starting %s %s (%s)",
+        APP_NAME,
+        APP_VERSION,
+        "windowed" if windowed else "full screen",
+    )
 
     # The theme must be applied before any widget is built, so the first
     # paint is already correct rather than flashing light then re-styling.
     theme = ThemeController(app, app)
     theme.apply()
 
-    context = AppContext(theme, app)
+    context = AppContext(theme, app, windowed=windowed)
     window = MainWindow(context)
-    # Full screen from the first paint - the window has no other size, and
-    # ``show()`` first would flash a framed window before it switched.
-    window.showFullScreen()
+    if windowed:
+        window.show()
+    else:
+        # Full screen from the first paint - the window has no other size, and
+        # ``show()`` first would flash a framed window before it switched.
+        window.showFullScreen()
     window.start()
 
     app.aboutToQuit.connect(context.shutdown)

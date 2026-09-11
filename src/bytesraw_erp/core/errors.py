@@ -32,6 +32,18 @@ class OdooCredentialsRejected(OdooAuthError):
     """
 
 
+class OdooSessionExpired(OdooAuthError):
+    """The Odoo session behind this client is no longer valid.
+
+    Distinct from :class:`OdooCredentialsRejected`, and the distinction is the
+    whole point: the stored details are still correct, the server has simply
+    forgotten the session - it restarted, its session store was cleared, or the
+    inactivity window elapsed. That is recoverable without troubling the user,
+    by authenticating again with the password already in the vault, so this
+    must never reach the branch that deletes an account.
+    """
+
+
 class OdooRpcError(BytesrawError):
     """The server answered with a JSON-RPC ``error`` member."""
 
@@ -41,6 +53,7 @@ class OdooRpcError(BytesrawError):
         *,
         debug: str | None = None,
         name: str | None = None,
+        code: int = 0,
     ) -> None:
         super().__init__(message)
         self.debug = debug
@@ -49,6 +62,10 @@ class OdooRpcError(BytesrawError):
         #: ``odoo/http.py``). It is the only part of the fault that is not
         #: translated, so it is the only safe thing to branch on.
         self.name = name
+        #: Odoo's own numeric code for the fault. Only 100 ("Odoo Session
+        #: Expired") and 404 are ever assigned - everything else is 0 - so it
+        #: corroborates :attr:`name` and never replaces it.
+        self.code = code
 
 
 class CredentialError(BytesrawError):
