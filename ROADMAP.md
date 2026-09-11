@@ -112,8 +112,6 @@ The app survives the things a real deployment does to it.
 
 ## v0.3.0 - Point of sale `[ ]`
 
-The reason the project is named `Odoo-POS-Desk`.
-
 - [x] **M3.1** Receipt printing via `QWebEngineView.print()` to a `QPrinter` (done in v0.1.1)
 - [ ] **M3.2** Printer selection and paper profile per account
 - [ ] **M3.3** ESC/POS direct printing for thermal printers over USB and serial

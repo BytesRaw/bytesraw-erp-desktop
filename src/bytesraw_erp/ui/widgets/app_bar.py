@@ -187,7 +187,7 @@ class AppBar(QWidget):
         self._back = self._tool_button("arrow-left", "Back", self.back_requested)
         self._forward = self._tool_button("arrow-right", "Forward", self.forward_requested)
         self._reload = self._tool_button("refresh", "Reload", self.reload_requested)
-        self._home = self._tool_button("home", "Odoo home", self.home_requested)
+        self._home = self._tool_button("home", "Home", self.home_requested)
         for button in (self._back, self._forward, self._reload, self._home):
             row.addWidget(button)
         layout.addWidget(group)
@@ -319,7 +319,7 @@ class AppBar(QWidget):
             self._register_icon(action, icon_name)
             menu.addAction(action)
         menu.addSeparator()
-        sign_out = QAction("Sign out of Odoo", self)
+        sign_out = QAction("Sign out", self)
         sign_out.triggered.connect(self.sign_out_requested.emit)
         self._register_icon(sign_out, "log-out")
         menu.addAction(sign_out)
