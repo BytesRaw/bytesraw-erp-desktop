@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bytesraw-erp"
-version = "0.1.0"
+version = "0.1.6"
 description = "Bytesraw ERP - a native desktop shell for Odoo 19"
 readme = "README.md"
 requires-python = ">=3.11"

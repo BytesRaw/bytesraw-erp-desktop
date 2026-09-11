@@ -12,7 +12,11 @@ extra-large view - and scaling one 128px bitmap to 16px turns a stroked
 monogram to mush. ``icon.ico`` carries nine pre-rendered frames, so each
 surface gets one drawn at its own size; it is also the file a Windows
 executable needs at build time (``pyinstaller --icon``), which a PNG cannot be.
-Regenerate it with ``tools/make_icon.py`` whenever the mark changes.
+
+It is checked in rather than built, and its layout is the one Windows itself
+ships: frames up to 128px as uncompressed DIBs, the 256px frame as PNG. Keep
+that shape if the mark is ever redrawn - it is what the shell, Qt and
+PyInstaller all read without argument.
 """
 
 from __future__ import annotations

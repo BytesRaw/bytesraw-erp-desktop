@@ -4,8 +4,11 @@ A native desktop client for **Odoo 19**. It embeds the Odoo web client in a real
 Chromium view, under a native app bar, and manages several Odoo accounts so the
 login screen appears once per server rather than once per launch.
 
-> Built on PySide6 + QtWebEngine. See
-> [ADR 0001](docs/adr/0001-stack-choice.md) for why.
+> Built on PySide6 + QtWebEngine. One requirement decides that: a
+> Chromium-class web view embedded **in-process on Windows**, in the same
+> layout as native widgets and sharing a cookie jar with the app's own HTTP
+> client. `QWebEngineView` is the only option that meets it without leaving
+> Python or splitting the app across two windows.
 
 ## Features
 
@@ -110,7 +113,6 @@ src/bytesraw_erp/
   data/        account registry and plain data models
   services/    Odoo JSON-RPC client, session assembly, web profiles, threading
   ui/          router, pages, widgets, theme
-docs/adr/      architecture decision records
 ```
 
 `data` and `core` are free of Qt widgets, so the model and storage layers are

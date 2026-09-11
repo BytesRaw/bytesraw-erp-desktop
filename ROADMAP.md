@@ -1,7 +1,7 @@
 # Bytesraw ERP - Roadmap to 1.0.0
 
 A native desktop shell for Odoo 19, built on PySide6 + QtWebEngine.
-See [ADR 0001](docs/adr/0001-stack-choice.md) for the stack decision.
+The README says why that stack.
 
 Legend: `[x]` done · `[~]` in progress · `[ ]` not started
 
@@ -13,7 +13,7 @@ The app opens, connects to one Odoo server, and renders `/odoo` under a native
 app bar.
 
 - [x] **M1.1** Project layout, packaging metadata, dependency pinning
-- [x] **M1.2** ADR recording the stack decision and the embedded-web-view requirement
+- [x] **M1.2** Stack decision taken and recorded, on the embedded-web-view requirement
 - [x] **M1.3** Path, logging and typed-error infrastructure
 - [x] **M1.4** `Account` / `SessionContext` data model
 - [x] **M1.5** Account registry: JSON metadata + passwords in Windows Credential Manager
