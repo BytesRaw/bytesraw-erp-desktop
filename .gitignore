@@ -185,3 +185,8 @@ CLAUDE.md
 # Qt / app runtime artefacts
 *.qm
 .qt_for_python/
+
+# Packaging recipes are checked in, despite the blanket *.spec and build/
+# rules above. Only the generated version resource stays out.
+!packaging/*.spec
+packaging/file_version_info.txt

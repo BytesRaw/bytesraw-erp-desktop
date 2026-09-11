@@ -161,13 +161,20 @@ The app survives the things a real deployment does to it.
 - [ ] **M6.1** Unit tests for the account store, router and model layers
 - [ ] **M6.2** `pytest-qt` tests for the app bar's read-only rule and the form
 - [ ] **M6.3** Integration test against a disposable Odoo 19 container
-- [ ] **M6.4** `ruff` clean in CI
-- [ ] **M6.5** GitHub Actions matrix build for Windows
+- [x] **M6.4** `ruff` clean in CI (a `ruff check .` gate in `release.yml`)
+- [~] **M6.5** GitHub Actions build for Windows - `release.yml` lints, tests
+      and builds on every release; a *matrix* (several Python versions) is
+      still open
 
 ## v1.0.0 - Release `[ ]`
 
-- [ ] **M7.1** PyInstaller one-folder build reproducible from a clean checkout
-- [ ] **M7.2** Signed MSI or Inno Setup installer
+- [x] **M7.1** PyInstaller one-folder build reproducible from a clean checkout
+      (`packaging/bytesraw_erp.spec`, driven by `packaging/build.ps1`)
+- [x] **M7.2** Inno Setup installer (`packaging/bytesraw-erp.iss`), built and
+      attached to a GitHub release by `.github/workflows/release.yml`.
+      **Signing is wired but inactive** - the workflow turns it on by itself
+      once the certificate secrets exist; until then the installer is unsigned
+      and SmartScreen will warn on download
 - [ ] **M7.3** In-app update check
 - [ ] **M7.4** Administrator deployment guide (silent install, pre-seeded accounts)
 - [ ] **M7.5** End-user manual

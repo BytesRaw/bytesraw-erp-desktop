@@ -141,6 +141,55 @@ testable without a running application.
 .venv/Scripts/python.exe -m pytest
 ```
 
+## Building a Windows installer
+
+Everything the build needs is in `packaging/`. Inno Setup 6.3 or newer has to
+be on the machine (`choco install innosetup`); the rest comes from the dev
+extra.
+
+```powershell
+.\packaging\build.ps1
+```
+
+That produces three things in `dist\`, all named from the version in
+`constants.py` so it is never typed twice:
+
+| | |
+| --- | --- |
+| `BytesrawERP\` | the application folder, `BytesrawERP.exe` beside `_internal\` |
+| `BytesrawERP-<version>-setup.exe` | the installer |
+| `BytesrawERP-<version>-windows-x64.zip` | the same folder, for machines where installers are blocked |
+
+Pass `-SkipApp` to rebuild only the installer, which turns a several-minute
+cycle into a few seconds while iterating on the `.iss`.
+
+**It is a one-folder build, not `--onefile`.** QtWebEngine is the reason: a
+one-file bundle re-extracts more than 400 MB into `%TEMP%` on every single
+launch before Python starts, and Chromium then has to spawn its sandboxed
+helper process out of a randomly named temp directory. The installer is what
+makes the folder a single thing to hand over.
+
+Installing is per-machine, into Program Files, so a till is set up once for
+every user of it. `/VERYSILENT` works for unattended deployment. The app writes
+nothing beside its executable - see *Where things are stored* above - so the
+program directory can stay read-only.
+
+### Releases
+
+`.github/workflows/release.yml` runs the same build on a Windows runner when a
+GitHub release is published, and attaches the installer, the portable zip and
+`SHA256SUMS.txt` to it. It refuses to build when the release tag disagrees with
+`constants.APP_VERSION`, so a `v0.2.0` release cannot ship binaries that call
+themselves 0.1.7.
+
+**Releases are currently unsigned**, so Windows SmartScreen warns whoever
+downloads one. The workflow already has the signing steps and enables them on
+its own as soon as the certificate secrets are present - nothing to change in
+it. Since mid-2023 an Authenticode key must live on a hardware token or in an
+HSM, so a CI build needs a cloud signing service (Azure Trusted Signing,
+DigiCert KeyLocker, SSL.com eSigner) rather than a certificate file in a
+secret.
+
 ## Roadmap
 
 [`ROADMAP.md`](ROADMAP.md) tracks the path to 1.0.0, including receipt printing,
@@ -148,4 +197,10 @@ barcode scanners and kiosk mode for point-of-sale use.
 
 ## Licence
 
-LGPL-3.0-or-later, matching the PySide6 dependency.
+Copyright (C) 2026 BytesRaw LLP <admin@bytesraw.com>
+
+LGPL-3.0-or-later, matching the PySide6 dependency: the app links QtWebEngine
+and the rest of Qt through PySide6. [`LICENSE`](LICENSE) carries the Lesser
+General Public License and [`LICENSE.GPL`](LICENSE.GPL) the General Public
+License it builds on. The installer shows the first and puts both beside the
+executable.
