@@ -131,7 +131,7 @@ jobs:
           [System.IO.File]::WriteAllText("$PWD/dist/SHA256SUMS.txt", $content, (New-Object System.Text.UTF8Encoding($false)))
           $lines | Write-Host
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bytesraw-erp-windows
           path: |
