@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "product": "bytesraw-erp",
+  "channel": "stable",
+  "version": "0.1.8",
+  "released": "2026-09-12",
+  "minimum_supported": "0.1.0",
+  "mandatory": false,
+  "rollout": 100,
+  "signed": false,
+  "notes_url": "https://github.com/BytesRaw/bytesraw-erp-desktop/releases/tag/v0.1.8",
+  "next_manifest_url": null,
+  "artifact": {
+    "url": "https://github.com/BytesRaw/bytesraw-erp-desktop/releases/download/v0.1.8/BytesrawERP-0.1.8-setup.exe",
+    "filename": "BytesrawERP-0.1.8-setup.exe",
+    "sha256": "6dcc1020a618df3ae41e131022faf7934e4407086b1be698b457c46e5015ef18",
+    "size": 146036024,
+    "installer": "inno-setup",
+    "silent_args": ["/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"]
+  }
+}
