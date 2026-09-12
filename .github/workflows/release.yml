@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 3.14 is what the project is developed on, and the first series PySide6
       # ships cp314 wheels for - see requirements.txt.
