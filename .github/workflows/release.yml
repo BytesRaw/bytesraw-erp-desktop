@@ -21,7 +21,7 @@ jobs:
 
       # 3.14 is what the project is developed on, and the first series PySide6
       # ships cp314 wheels for - see requirements.txt.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
