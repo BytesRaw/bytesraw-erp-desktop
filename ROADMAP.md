@@ -181,7 +181,36 @@ The app survives the things a real deployment does to it.
       **Signing is wired but inactive** - the workflow turns it on by itself
       once the certificate secrets exist; until then the installer is unsigned
       and SmartScreen will warn on download
-- [ ] **M7.3** In-app update check
+- [ ] **M7.3** Updates, in this order. An updater that downloads and executes
+      an unsigned binary is the wrong thing to build first, so signing leads:
+  - [ ] **M7.3.1** Signing active - the workflow enables itself once the
+        certificate secrets exist - and the updater verifies Authenticode as
+        well as SHA-256 before it runs anything it downloaded
+  - [ ] **M7.3.2** An update manifest on a BytesRaw-owned URL rather than the
+        GitHub API: version, artifact URL, sha256, size, notes URL, a
+        `minimum_supported` floor and a rollout percentage, one file per
+        channel (`stable`, `beta`). Artifacts stay on GitHub releases; the
+        indirection is what lets hosting move later without stranding the
+        installed base. That URL is compiled into every shipped binary, so it
+        is settled before the first signed release, not after
+  - [ ] **M7.3.3** In-app check on launch and every few hours, through
+        `run_async`, announced by a toast. Installing runs
+        `setup.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`; the fixed
+        `AppId` and Inno's Restart Manager already make that an in-place
+        upgrade over a running till
+  - [ ] **M7.3.4** Unattended updates for tills, where nobody at the keyboard
+        can answer a UAC prompt: a scheduled task installed by the `.iss`,
+        running as SYSTEM in a maintenance window. The app returns at logon
+        through the existing startup shortcut rather than being restarted out
+        of session 0
+  - Deferred deliberately: **delta updates**. Measured at 139 MB per
+    installer, which a monthly cadence absorbs. If it ever does hurt, the
+    lever is that Qt and Chromium change on PySide6's cadence while the app
+    changes weekly - split the payload before reaching for a patch format
+- [ ] **M7.8** A migration path for `accounts.json` and `settings.json`. Both
+      stores guard *forward* today (a file written by a newer version is
+      refused rather than misread) but neither can migrate an older one, so
+      the first breaking schema change needs the other half written with it
 - [ ] **M7.4** Administrator deployment guide (silent install, pre-seeded accounts)
 - [ ] **M7.5** End-user manual
 - [ ] **M7.6** Verified against Odoo 19.0 stable, Online and on-premise

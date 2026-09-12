@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Actions pinned by major tag still drift; a public repo should not be
+  # running a deprecated or vulnerable action without noticing.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+
+  # Runtime pins are floors, not locks, so this is mostly about being told
+  # when a floor should move - PySide6 in particular, since the Qt and
+  # Chromium versions inside it are what a security advisory lands against.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3

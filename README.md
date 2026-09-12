@@ -1,5 +1,11 @@
 # Bytesraw ERP
 
+[![CI](https://github.com/BytesRaw/bytesraw-erp-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/BytesRaw/bytesraw-erp-desktop/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4)
+![Odoo](https://img.shields.io/badge/Odoo-19-714B67)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
+![Licence](https://img.shields.io/badge/licence-LGPL--3.0--or--later-blue)
+
 A native desktop client for **Odoo 19**. It embeds the Odoo web client in a real
 Chromium view, under a native app bar, and manages several Odoo accounts so the
 login screen appears once per server rather than once per launch.
@@ -9,6 +15,43 @@ login screen appears once per server rather than once per launch.
 > layout as native widgets and sharing a cookie jar with the app's own HTTP
 > client. `QWebEngineView` is the only option that meets it without leaving
 > Python or splitting the app across two windows.
+
+![Bytesraw ERP running the Odoo 19 web client under its native app bar](docs/images/app-screenshot.png)
+
+*The native bar carries the mark and build number, navigation, printing, the
+theme, the interface language and the window controls. Everything below it is
+Odoo's own web client, unmodified.*
+
+## Download
+
+Windows builds are attached to every
+[release](https://github.com/BytesRaw/bytesraw-erp-desktop/releases/latest):
+
+| File | Use it when |
+| --- | --- |
+| `BytesrawERP-<version>-setup.exe` | Normal install. Per-machine, into Program Files, so a shared till is set up once for everyone who uses it. |
+| `BytesrawERP-<version>-windows-x64.zip` | Installers are blocked on the machine. Unpack anywhere and run `BytesrawERP.exe`. |
+| `SHA256SUMS.txt` | Checking a download before you run it. |
+
+```powershell
+Get-FileHash .\BytesrawERP-0.1.8-setup.exe -Algorithm SHA256
+```
+
+**Releases are not yet code-signed**, so Windows SmartScreen will warn on
+download and on first run: choose *More info* then *Run anyway*. Verify the hash
+above against `SHA256SUMS.txt` before you do. Signing is already wired into the
+release workflow and turns itself on as soon as the certificate exists.
+
+For unattended deployment across several machines, the installer takes
+`/VERYSILENT`.
+
+## Requirements
+
+**To run it:** Windows 10 version 1809 or newer, or Windows 11 - that is what
+QtWebEngine 6.11 needs. An Odoo 19 server, on-premise or Odoo Online. Nothing
+else; Python and Qt are inside the download.
+
+**To build it from source:** Python 3.11 or newer, developed on 3.14.
 
 ## Features
 
@@ -40,32 +83,26 @@ login screen appears once per server rather than once per launch.
   show the print dialog, once, in Settings. Odoo's own Print button then reaches
   paper instead of dropping a PDF in Downloads.
 
-## Requirements
+## First run
 
-- Windows 10 or 11
-- Python 3.11 or newer (developed on 3.14)
-- An Odoo 19 server, on-premise or Odoo Online
-
-## Getting started
-
-```bash
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe run.py
-```
-
-On first launch the app shows the **Add account** form. Enter the server URL and
-press **Load** to list the databases it exposes; servers that hide their
-database list simply need the name typed in. Saving authenticates first, so an
-account is never stored with credentials that do not work.
+The app opens on the **Add account** form. Enter the server URL and press
+**Load** to list the databases it exposes; servers that hide their database list
+simply need the name typed in. Saving authenticates first, so an account is
+never stored with credentials that do not work.
 
 The shell runs full screen, with its own minimise and close buttons in place of
-a title bar. Add `--windowed` to launch it in an ordinary resizable window
-instead - the caption buttons then also carry a full-screen toggle, as does F11.
+a title bar.
 
-```bash
-.venv/Scripts/python.exe run.py --windowed
-```
+## Updating
+
+Download a newer installer and run it. It upgrades the existing install in
+place: your accounts, saved passwords, settings and signed-in Odoo sessions are
+untouched, because none of them live beside the executable. Uninstalling asks
+before removing them.
+
+An in-app update check is on the roadmap (M7.3); until it lands, watch the
+[releases](https://github.com/BytesRaw/bytesraw-erp-desktop/releases) page, or
+the [changelog](CHANGELOG.md).
 
 ## When the Odoo view looks wrong
 
@@ -138,7 +175,34 @@ they print by themselves according to the settings above.
 Removing an account deletes its stored password and its browsing data from this
 computer. Nothing changes on the Odoo server.
 
-## Project layout
+## Support
+
+Open an [issue](https://github.com/BytesRaw/bytesraw-erp-desktop/issues) with
+the version from **Settings -> About**, your Windows version, and the log file
+from the folder above. For a security report read [SECURITY.md](SECURITY.md)
+first - those go privately, not into an issue.
+
+## Development
+
+```bash
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -e ".[dev]"
+.venv/Scripts/python.exe run.py --windowed
+```
+
+`--windowed` launches an ordinary resizable window instead of the full-screen
+shell, and only then do the caption buttons carry a full-screen toggle, as does
+F11.
+
+```bash
+.venv/Scripts/python.exe -m ruff check .
+.venv/Scripts/python.exe -m pytest
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the house rules, the layering rule and
+the two tests that must not be run headless.
+
+### Project layout
 
 ```
 src/bytesraw_erp/
@@ -151,15 +215,7 @@ src/bytesraw_erp/
 `data` and `core` are free of Qt widgets, so the model and storage layers are
 testable without a running application.
 
-## Development
-
-```bash
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
-.venv/Scripts/python.exe -m ruff check .
-.venv/Scripts/python.exe -m pytest
-```
-
-## Building a Windows installer
+### Building a Windows installer
 
 Everything the build needs is in `packaging/`. Inno Setup 6.3 or newer has to
 be on the machine (`choco install innosetup`); the rest comes from the dev
@@ -200,18 +256,17 @@ GitHub release is published, and attaches the installer, the portable zip and
 `constants.APP_VERSION`, so a `v0.2.0` release cannot ship binaries that call
 themselves 0.1.7.
 
-**Releases are currently unsigned**, so Windows SmartScreen warns whoever
-downloads one. The workflow already has the signing steps and enables them on
-its own as soon as the certificate secrets are present - nothing to change in
-it. Since mid-2023 an Authenticode key must live on a hardware token or in an
-HSM, so a CI build needs a cloud signing service (Azure Trusted Signing,
-DigiCert KeyLocker, SSL.com eSigner) rather than a certificate file in a
-secret.
+The workflow already carries the signing steps and enables them on its own as
+soon as the certificate secrets are present - nothing to change in it. Since
+mid-2023 an Authenticode key must live on a hardware token or in an HSM, so a
+CI build needs a cloud signing service (Azure Trusted Signing, DigiCert
+KeyLocker, SSL.com eSigner) rather than a certificate file in a secret.
 
-## Roadmap
+## Roadmap and changelog
 
 [`ROADMAP.md`](ROADMAP.md) tracks the path to 1.0.0, including receipt printing,
-barcode scanners and kiosk mode for point-of-sale use.
+barcode scanners and kiosk mode for point-of-sale use, and says what is
+deliberately out of scope. [`CHANGELOG.md`](CHANGELOG.md) records what shipped.
 
 ## Licence
 
@@ -222,3 +277,12 @@ and the rest of Qt through PySide6. [`LICENSE`](LICENSE) carries the Lesser
 General Public License and [`LICENSE.GPL`](LICENSE.GPL) the General Public
 License it builds on. The installer shows the first and puts both beside the
 executable.
+
+## Trademarks
+
+Odoo is a registered trademark of **Odoo S.A.** This project is an independent
+client and is not affiliated with, endorsed by, or sponsored by Odoo S.A. It
+installs no addon on an Odoo database and modifies no Odoo source; every use of
+the name here says which software this one talks to.
+
+Bytesraw is a trademark of **BytesRaw LLP**.

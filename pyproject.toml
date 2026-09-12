@@ -10,12 +10,27 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "LGPL-3.0-or-later" }
 authors = [{ name = "BytesRaw", email = "admin@bytesraw.com" }]
+keywords = ["odoo", "odoo19", "desktop", "point-of-sale", "pyside6", "qtwebengine"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Office/Business :: Financial :: Point-Of-Sale",
+]
 
 dependencies = [
     "PySide6>=6.11.0",
     "httpx>=0.28.1",
     "keyring>=25.0.0",
 ]
+
+[project.urls]
+Homepage = "https://bytesraw.com"
+Repository = "https://github.com/BytesRaw/bytesraw-erp-desktop"
+Changelog = "https://github.com/BytesRaw/bytesraw-erp-desktop/blob/main/CHANGELOG.md"
+Issues = "https://github.com/BytesRaw/bytesraw-erp-desktop/issues"
 
 [project.optional-dependencies]
 dev = [

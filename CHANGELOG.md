@@ -1,0 +1,168 @@
+# Changelog
+
+All notable changes to Bytesraw ERP are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
+
+The version lives in exactly one place, `constants.APP_VERSION`, and the release
+workflow refuses to build a tag that disagrees with it.
+
+> Versions 0.1.0 through 0.1.7 were developed before the project was published.
+> Their entries are reconstructed from `ROADMAP.md` and dated by commit, and no
+> binaries were distributed for them.
+
+## [0.1.8] - unreleased
+
+### Added
+
+- **Compatibility rendering mode** for machines whose graphics driver garbles
+  the Odoo view. Measured on a Windows 10 till with Intel HD Graphics of the
+  Bay Trail generation: the app bar painted correctly while the web view below
+  it came out as vertical stripes. **Settings -> Display -> Rendering** now
+  offers a mode that draws the view on the processor instead, stored per
+  machine and applied on the next launch.
+- `--software-render` and `--gpu-render` command-line flags, which override the
+  stored setting for a single launch without changing it - for a till too
+  corrupted on screen to reach Settings at all.
+
+## [0.1.7] - 2026-09-12
+
+### Added
+
+- **Windows installer and portable zip.** A PyInstaller one-folder bundle, an
+  Inno Setup installer that upgrades an existing install in place, and a zip
+  for machines where installers are blocked. `.github/workflows/release.yml`
+  builds all three on a published release and attaches them with checksums.
+- `--windowed`, which launches the shell in an ordinary resizable window. Only
+  then do the caption buttons carry a full-screen toggle, as does F11.
+
+### Changed
+
+- **Closing is immediate.** The window hides before the teardown rather than
+  after it, pages release their web views before the profiles they depend on
+  are freed, and the background thread pool stops accepting work instead of
+  being waited on at process exit.
+- **The app bar's print button opens its menu and nothing else.** Its former
+  action half printed straight to paper on a till configured that way, from a
+  click aimed at the icon eight pixels away; every mode is now a menu entry,
+  preview included.
+
+### Fixed
+
+- Ctrl+P did nothing. A `QAction`'s shortcut only fires while the action
+  belongs to a widget in the active window, and sitting in a menu that has
+  never been opened is not that.
+- A queued full-screen correction could resurrect a window that was already on
+  its way down, so closing sometimes took two clicks.
+
+## [0.1.6] - 2026-09-12
+
+### Added
+
+- **Full-screen kiosk shell.** One window for its whole life: no title bar, and
+  the Windows taskbar stays covered. Minimise and close live in the app bar,
+  and float in the same corner on the screens that carry no app bar - so the
+  first-launch account form is never a screen with no way to quit.
+
+### Removed
+
+- The company name and logo from the app bar, and with them the per-session
+  logo round trip. The shell takes no part in multi-company at all: Odoo's own
+  navbar owns that choice, and a second control over one session can only
+  disagree with the first.
+
+## [0.1.5] - 2026-09-11
+
+### Added
+
+- A print **preview** mode. Windows' own print dialog has no preview pane, so
+  the preview is drawn by the app through `QPrintPreviewDialog`.
+- Download notifications with **Show in folder**, and a confirmation toast when
+  a print job is sent.
+- The product logo and a real application icon, carried into the window, the
+  taskbar and the account form.
+
+### Removed
+
+- The "match system" theme. Resolving it re-entered the theme controller, so
+  every switch applied twice and raced two web-view reloads against each other,
+  leaving the embedded client stuck loading. Light and Dark only, Light by
+  default.
+
+## [0.1.4] - 2026-09-11
+
+### Removed
+
+- The company switcher. Making a switch stick meant writing
+  `res.users.company_id`, which changes that user's default company everywhere
+  including their other browsers - a heavier side effect than Odoo's own
+  switch has.
+
+## [0.1.3] - 2026-09-11
+
+### Fixed
+
+- **Odoo report auto-printing fired only on a second click.** Odoo 19 answers
+  its Print button with an XHR POST to `/report/download` and then a `blob:`
+  URL, so the download that arrives carries no report URL to match on. A
+  per-profile request interceptor now notes the outgoing report request and
+  claims the blob PDF that follows.
+- An unrelated PDF downloaded moments after a report could be claimed as that
+  report. Claims are one-for-one and expire.
+
+## [0.1.2] - 2026-09-11
+
+### Added
+
+- A **Settings page** and a local settings store, separate from accounts:
+  appearance, print mode, printer, auto-print and keep-a-copy.
+- **Odoo report PDFs are intercepted and printed** per those settings. This is
+  what makes Odoo's own Print button reach paper instead of dropping a file in
+  Downloads. Ordinary attachments and exports still go to Downloads.
+- The theme is written to `res.users.settings.color_scheme`, which outranks the
+  `color_scheme` cookie on servers that have the field. Capability is probed at
+  sign-in, so a server without it is a silent no-op rather than an error.
+
+### Changed
+
+- Print mode moved from per-account to app-wide. Which printer is attached is a
+  fact about the machine, not about the Odoo database.
+
+## [0.1.1] - 2026-09-11
+
+### Added
+
+- Light and dark themes, carried into Odoo itself where the server supports it,
+  with Chromium's ForceDarkMode as the fallback for servers that have no dark
+  stylesheet at all.
+- Printing: straight to the Windows default printer, or through the system
+  print dialog. `window.print()` from a POS receipt is routed the same way.
+- WCAG AA contrast tests across both palettes.
+
+### Fixed
+
+- Invisible menu text in dark mode. Every self-painting widget now declares
+  both a background and a foreground.
+
+## [0.1.0] - 2026-09-11
+
+The walking skeleton: the app opens, connects to an Odoo 19 server, and renders
+the web client under a native app bar.
+
+### Added
+
+- **Multiple accounts,** each with its own URL, database and login. Passwords go
+  to the Windows Credential Manager and never to a file.
+- **Sign-in over JSON-RPC,** with the resulting cookie jar planted into that
+  account's browser profile - including the sticky routing cookie a load
+  balancer sets - so the embedded client opens already authenticated instead of
+  logging in twice.
+- **Isolated sessions:** a `QWebEngineProfile` per account, with its own
+  persistent cookie storage.
+- The last Odoo screen visited, remembered per account and restored on the next
+  launch.
+- A native app bar carrying the product mark, the build number, navigation, the
+  signed-in user and the interface language.
+
+[0.1.8]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/BytesRaw/bytesraw-erp-desktop/releases/tag/v0.1.7

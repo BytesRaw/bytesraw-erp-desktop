@@ -1,0 +1,66 @@
+name: CI
+
+# The release workflow already lints and tests before it builds, but that only
+# runs on a release. This is the gate for everyday work and for pull requests.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".github/ISSUE_TEMPLATE/**"
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".github/ISSUE_TEMPLATE/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # Windows is the only supported platform, and the QtWebEngine tests need a
+    # real one - two tests in the suite fail under offscreen and pass here.
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      # constants.py is the only place a version is allowed to live. Catch a
+      # drift against pyproject.toml here rather than at release time.
+      - name: Versions agree
+        shell: pwsh
+        run: |
+          $constants = (python -c "from bytesraw_erp.constants import APP_VERSION; print(APP_VERSION)").Trim()
+          $metadata = (python -c "from importlib.metadata import version; print(version('bytesraw-erp'))").Trim()
+          Write-Host "constants.py=$constants  pyproject.toml=$metadata"
+          if ($constants -ne $metadata) {
+            throw "constants.APP_VERSION '$constants' does not match pyproject.toml '$metadata'."
+          }
+
+      - name: Test
+        env:
+          # The runner has no GPU. Without these the QtWebEngine tests can hang
+          # on Chromium's GPU process instead of falling back to software.
+          QTWEBENGINE_CHROMIUM_FLAGS: "--disable-gpu --disable-software-rasterizer --no-sandbox"
+        run: pytest -q

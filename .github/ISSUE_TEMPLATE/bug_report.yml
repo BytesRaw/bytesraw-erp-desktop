@@ -1,0 +1,87 @@
+name: Bug report
+description: Something in the desktop app behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do **not** report a security vulnerability
+        here - see [SECURITY.md](https://github.com/BytesRaw/bytesraw-erp-desktop/blob/main/SECURITY.md).
+
+        Never paste a password, a `session_id` cookie, or the contents of
+        `accounts.json` into a public issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown beside the mark in the app bar, and under Settings -> About.
+      placeholder: "0.1.8"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - Installer (setup.exe)
+        - Portable zip
+        - From source
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: "winver, or Settings -> System -> About. Include the build number."
+      placeholder: "Windows 11 Pro 24H2, build 26100"
+    validations:
+      required: true
+
+  - type: input
+    id: odoo
+    attributes:
+      label: Odoo version and hosting
+      placeholder: "Odoo 19.0, on-premise behind nginx / Odoo Online / Odoo.sh"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rendering
+    attributes:
+      label: Rendering mode
+      description: Settings -> Display -> Rendering.
+      options:
+        - Automatic (default)
+        - Compatibility (software)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: |
+        From `%APPDATA%\BytesRaw\Bytesraw ERP\logs`. The most recent file, or
+        the lines around the failure. Check it for anything you would rather
+        not publish before pasting.
+      render: text
+
+  - type: markdown
+    attributes:
+      value: |
+        **If the Odoo view is striped, blank or garbled while the app bar looks
+        correct,** that is a known graphics-driver symptom: try
+        **Settings -> Display -> Rendering -> Compatibility mode** and reopen
+        the app. Tell us whether it helped, and which machine and GPU it is.
