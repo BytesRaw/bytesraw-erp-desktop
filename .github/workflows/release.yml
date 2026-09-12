@@ -82,6 +82,14 @@ jobs:
       # SSL.com eSigner are equivalent alternatives - swap the action, keep the
       # two call sites.
       #
+      # The action is Azure/artifact-signing-action, renamed from
+      # azure/trusted-signing-action along with the service. The old name still
+      # resolves through GitHub's repository redirect, so a bump that keeps it
+      # looks fine - but this step is the one thing no CI run can exercise, and
+      # a redirect is not what it should rest on. Dependabot proposed v2 under
+      # the old name; the name is corrected here so it tracks the right
+      # repository from now on. Every input below survived the major bump.
+      #
       # There are two, and both matter: the app's own exe is signed BEFORE Inno
       # packs it, because a user who inspects the installed program sees that
       # file, not the installer. The installer itself is signed by ISCC via
@@ -97,7 +105,7 @@ jobs:
 
       - name: Sign the application executable
         if: steps.signing.outputs.enabled == 'true'
-        uses: azure/trusted-signing-action@v0
+        uses: Azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
