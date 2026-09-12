@@ -67,6 +67,24 @@ instead - the caption buttons then also carry a full-screen toggle, as does F11.
 .venv/Scripts/python.exe run.py --windowed
 ```
 
+## When the Odoo view looks wrong
+
+On a machine with an old graphics driver - measured on Intel HD Graphics of the
+Bay Trail generation under Windows 10 - the app bar paints correctly while the
+Odoo view below it comes out as vertical stripes, blank white, or garbled
+tiles. That split is the diagnosis: the bar is drawn by Qt, the view by
+Chromium, and only the second one goes through the driver's compositing path.
+
+**Settings -> Display -> Rendering -> Compatibility mode** draws the view on
+the processor instead. It is stored per machine and applied on the next launch,
+so close and reopen the app after choosing it. A single launch can be forced
+either way without changing the setting:
+
+```bash
+.venv/Scripts/python.exe run.py --software-render
+.venv/Scripts/python.exe run.py --gpu-render
+```
+
 ## How sign-in works
 
 The app authenticates over Odoo's JSON-RPC endpoint and then plants the

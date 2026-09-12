@@ -39,6 +39,7 @@ class AppContext(QObject):
         parent: QObject | None = None,
         *,
         windowed: bool = False,
+        settings: SettingsStore | None = None,
     ) -> None:
         super().__init__(parent)
         #: True when the app was launched with ``--windowed``. The shell is a
@@ -51,7 +52,11 @@ class AppContext(QObject):
         self.store = AccountStore()
         self.profiles = ProfileManager(self)
         self.printing = PrintService(self)
-        self.settings = SettingsStore()
+        #: ``app.run`` loads the settings before the QApplication exists - the
+        #: rendering mode has to be known by then - and hands that store on, so
+        #: the file is read once and one object answers for it. A caller that
+        #: does not care (a test, a page harness) gets a fresh one.
+        self.settings = settings or SettingsStore()
         self.theme = theme
         self._account: Account | None = None
         self._session: SessionContext | None = None

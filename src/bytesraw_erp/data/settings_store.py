@@ -20,13 +20,13 @@ from typing import Any
 from bytesraw_erp.constants import SETTINGS_VERSION
 from bytesraw_erp.core.errors import ConfigError
 from bytesraw_erp.core.paths import settings_file
-from bytesraw_erp.data.models import PrintSettings
+from bytesraw_erp.data.models import DisplaySettings, PrintSettings
 
 _log = logging.getLogger(__name__)
 
 
 class SettingsStore:
-    """Loads and saves :class:`PrintSettings` (and future sections) as JSON.
+    """Loads and saves :class:`PrintSettings` and :class:`DisplaySettings` as JSON.
 
     A missing or unreadable file yields defaults rather than an error: the app
     must still start when its settings file is damaged, and the user can then
@@ -36,12 +36,14 @@ class SettingsStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or settings_file()
         self._printing = PrintSettings()
+        self._display = DisplaySettings()
         self._loaded = False
 
     # -- lifecycle ---------------------------------------------------------
 
     def load(self) -> None:
         self._printing = PrintSettings()
+        self._display = DisplaySettings()
         self._loaded = True
 
         if not self._path.exists():
@@ -63,11 +65,13 @@ class SettingsStore:
             return
 
         self._printing = PrintSettings.from_dict(raw.get("printing") or {})
+        self._display = DisplaySettings.from_dict(raw.get("display") or {})
 
     def save(self) -> None:
         payload = {
             "version": SETTINGS_VERSION,
             "printing": self._printing.to_dict(),
+            "display": self._display.to_dict(),
         }
         tmp = self._path.with_suffix(".json.tmp")
         try:
@@ -101,6 +105,21 @@ class SettingsStore:
             settings.printer_name or "<system default>",
             settings.auto_print_reports,
         )
+
+    # -- display -----------------------------------------------------------
+
+    @property
+    def display(self) -> DisplaySettings:
+        self._require_loaded()
+        return self._display
+
+    def set_display(self, settings: DisplaySettings) -> None:
+        self._require_loaded()
+        if settings == self._display:
+            return
+        self._display = settings
+        self.save()
+        _log.info("Display settings: render_mode=%s", settings.render_mode.value)
 
     @property
     def path(self) -> Path:

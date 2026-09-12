@@ -121,6 +121,12 @@ The app survives the things a real deployment does to it.
       `odoo.http.SessionExpiredException`, and a five-minute probe that doubles
       as a keepalive - all recover by signing in again with the password
       already in the vault, once per expiry, landing back on the same page
+- [x] **M2.9** Software-rendering fallback for a broken graphics driver. A till
+      with Intel HD Graphics (Bay Trail) on Windows 10 painted the web view as
+      vertical stripes under a perfectly correct app bar; Settings -> Display
+      now offers a compatibility mode that takes the GPU out of Chromium's path
+      and Qt's, stored per machine and applied on the next launch, with
+      `--software-render` / `--gpu-render` to override one launch
 - [ ] **M2.2** Offline / server-unreachable screen with retry
 - [ ] **M2.3** Two-factor authentication: fall back to the HTML login form in-view
 - [ ] **M2.4** Certificate-error UX (trust-once prompt instead of a config checkbox only)

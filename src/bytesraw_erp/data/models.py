@@ -39,6 +39,34 @@ class PrintMode(StrEnum):
         }[self.value]
 
 
+class RenderMode(StrEnum):
+    """How the embedded web view is rasterised.
+
+    ``AUTO`` leaves the decision to Chromium, which is correct on any machine
+    with a sound graphics driver. ``SOFTWARE`` takes the GPU out of the path
+    entirely - the remedy for a driver that paints the web view as stripes,
+    blank white or garbled tiles while the native app bar above it renders
+    perfectly. Measured on Intel HD Graphics (Bay Trail, Celeron J1800) under
+    Windows 10.
+
+    Lives here, next to :class:`PrintMode`, for the same reason: a fact about
+    the machine the app is installed on, stored in ``settings.json``.
+    """
+
+    #: Whatever Chromium's own GPU probing decides.
+    AUTO = "auto"
+    #: Rasterise and composite on the CPU, and give Qt the software OpenGL
+    #: implementation too.
+    SOFTWARE = "software"
+
+    @property
+    def label(self) -> str:
+        return {
+            "auto": "Use the graphics card (recommended)",
+            "software": "Compatibility mode - render without the graphics card",
+        }[self.value]
+
+
 def new_account_id() -> str:
     return uuid.uuid4().hex
 
@@ -67,6 +95,14 @@ def coerce_print_mode(raw: object) -> PrintMode:
         return PrintMode(str(raw))
     except ValueError:
         return PrintMode.DIALOG
+
+
+def coerce_render_mode(raw: object) -> RenderMode:
+    """Tolerate an unknown value in a hand-edited or older settings file."""
+    try:
+        return RenderMode(str(raw))
+    except ValueError:
+        return RenderMode.AUTO
 
 
 @dataclass(slots=True)
@@ -241,4 +277,29 @@ class PrintSettings:
         )
 
     def evolve(self, **changes: Any) -> PrintSettings:
+        return replace(self, **changes)
+
+
+@dataclass(frozen=True, slots=True)
+class DisplaySettings:
+    """How this installation paints the embedded Odoo client.
+
+    App-wide rather than per-account, like :class:`PrintSettings`: a graphics
+    driver is a property of the till, not of the database it talks to.
+    """
+
+    render_mode: RenderMode = RenderMode.AUTO
+
+    @property
+    def uses_gpu(self) -> bool:
+        return self.render_mode is RenderMode.AUTO
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"render_mode": self.render_mode.value}
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> DisplaySettings:
+        return cls(render_mode=coerce_render_mode(raw.get("render_mode")))
+
+    def evolve(self, **changes: Any) -> DisplaySettings:
         return replace(self, **changes)

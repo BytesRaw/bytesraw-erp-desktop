@@ -1,4 +1,4 @@
-"""Application settings: appearance, printing, and what is stored where.
+"""Application settings: appearance, display, printing, and what is stored where.
 
 Changes apply and save immediately. A settings page with a Save button invites
 the user to close it with unsaved edits; applying on change means the printer
@@ -8,8 +8,13 @@ Printing is configured here, once, rather than per account: which printer is
 attached is a fact about the machine in front of the user, not about the Odoo
 database they are signed in to.
 
-Each group is a card with a badged header, so the page reads as three decisions
-rather than one long list of controls. The About card is the honest home for
+The one setting here that cannot apply immediately is the rendering mode:
+Chromium's command line is read once, as it starts. That card says so, and the
+page is Qt widgets throughout - which is what makes it readable on the machine
+whose web view is the problem.
+
+Each group is a card with a badged header, so the page reads as a short list of
+decisions rather than one long list of controls. The About card is the honest home for
 the build number, the settings file and the folders the app writes to - the
 things a user is asked for when they report a problem.
 """
@@ -35,7 +40,13 @@ from PySide6.QtWidgets import (
 from bytesraw_erp.constants import APP_NAME, APP_VERSION
 from bytesraw_erp.core.errors import BytesrawError
 from bytesraw_erp.core.paths import logs_dir, reports_dir
-from bytesraw_erp.data.models import PrintMode, PrintSettings
+from bytesraw_erp.data.models import (
+    DisplaySettings,
+    PrintMode,
+    PrintSettings,
+    RenderMode,
+)
+from bytesraw_erp.services.graphics import active_render_mode
 from bytesraw_erp.services.print_service import available_printers, default_printer_name
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
@@ -56,7 +67,7 @@ _SYSTEM_DEFAULT = ""
 
 
 class SettingsPage(QWidget):
-    """Appearance and printing preferences, stored locally."""
+    """Appearance, display and printing preferences, stored locally."""
 
     def __init__(self, context: AppContext, router: Router, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -80,7 +91,7 @@ class SettingsPage(QWidget):
         header = QHBoxLayout()
         header.setSpacing(16)
         header.addWidget(
-            BrandHeader("Settings", "Appearance and printing, for this computer."), 1
+            BrandHeader("Settings", "Appearance, display and printing, for this computer."), 1
         )
         self._close = QPushButton("Done")
         self._close.setProperty("variant", "primary")
@@ -92,6 +103,7 @@ class SettingsPage(QWidget):
         layout.addWidget(self._banner)
 
         layout.addWidget(self._build_appearance_card())
+        layout.addWidget(self._build_display_card())
         layout.addWidget(self._build_printing_card())
         layout.addWidget(self._build_about_card())
         layout.addStretch(1)
@@ -126,6 +138,36 @@ class SettingsPage(QWidget):
         self._theme_hint = hint("")
         card.body.addWidget(Field("Theme", self._theme))
         card.body.addWidget(self._theme_hint)
+        return card
+
+    def _build_display_card(self) -> Card:
+        card = Card()
+        card.body.addWidget(
+            self._section(
+                "monitor",
+                "Display",
+                "How the Odoo view is drawn. Only change this if it looks wrong.",
+            )
+        )
+
+        self._render_mode = QComboBox()
+        self._render_mode.setMaximumWidth(_WIDE_CONTROL)
+        for mode in (RenderMode.AUTO, RenderMode.SOFTWARE):
+            self._render_mode.addItem(mode.label, mode.value)
+        self._render_mode.currentIndexChanged.connect(self._on_display_changed)
+        card.body.addWidget(
+            Field(
+                "Rendering",
+                self._render_mode,
+                "Some older graphics drivers paint the Odoo view as stripes, "
+                "blank white or garbled tiles while this bar and this page "
+                "stay correct. Compatibility mode draws it on the processor "
+                "instead, which fixes that at the cost of some speed.",
+            )
+        )
+
+        self._render_hint = hint("")
+        card.body.addWidget(self._render_hint)
         return card
 
     def _build_printing_card(self) -> Card:
@@ -229,6 +271,12 @@ class SettingsPage(QWidget):
             self._theme.setCurrentIndex(max(index, 0))
             self._refresh_theme_hint()
 
+            display = self._context.settings.display
+            self._render_mode.setCurrentIndex(
+                max(self._render_mode.findData(display.render_mode.value), 0)
+            )
+            self._refresh_render_hint()
+
             self._populate_printers()
             settings = self._context.settings.printing
             self._mode.setCurrentIndex(max(self._mode.findData(settings.mode.value), 0))
@@ -258,6 +306,24 @@ class SettingsPage(QWidget):
         )
         for name in available_printers():
             self._printer.addItem(name, name)
+
+    def _refresh_render_hint(self) -> None:
+        """Say whether the stored mode is the one actually in force.
+
+        It cannot be, until the next launch: Chromium reads its command line
+        as it starts, so a change here is a promise about the next process
+        rather than about this one. Saying nothing would leave the user
+        watching the same stripes and concluding the setting does nothing.
+        """
+        stored = RenderMode(str(self._render_mode.currentData()))
+        active = active_render_mode()
+        if stored is active:
+            self._render_hint.setText(f"In force now: {active.label.lower()}.")
+        else:
+            self._render_hint.setText(
+                f"Saved. Close and reopen {APP_NAME} to apply it - until then "
+                f"this session is still using: {active.label.lower()}."
+            )
 
     def _refresh_theme_hint(self) -> None:
         """Explain what the theme does to Odoo on *this* server.
@@ -292,6 +358,25 @@ class SettingsPage(QWidget):
         self._context.theme.set_theme(Theme(str(value)))
         self._refresh_theme_hint()
         self._banner.show_info("Appearance updated.")
+
+    def _on_display_changed(self, index: int) -> None:
+        if self._loading or index < 0:
+            return
+        settings = DisplaySettings(
+            render_mode=RenderMode(str(self._render_mode.itemData(index)))
+        )
+        try:
+            self._context.settings.set_display(settings)
+        except BytesrawError as exc:
+            self._banner.show_error(str(exc))
+            return
+        self._refresh_render_hint()
+        if settings.render_mode is active_render_mode():
+            self._banner.show_info("Display setting saved.")
+        else:
+            self._banner.show_info(
+                f"Display setting saved. Close and reopen {APP_NAME} to apply it."
+            )
 
     def _on_printing_changed(self, *_args: object) -> None:
         if self._loading:
