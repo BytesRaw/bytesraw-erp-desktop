@@ -4,17 +4,20 @@ This page is only reached deliberately - from the app bar menu, or when the
 user signs out. On a normal launch with at least one saved account the app goes
 straight to :mod:`bytesraw_erp.ui.pages.odoo_page`; the list is not a login
 gate.
+
+Laid out on the shared :class:`~bytesraw_erp.ui.widgets.page.PageShell`, like
+the account form and the settings page. It used to carry a bare text title and
+no product mark, which made the two screens a user moves between - this one and
+the form it routes to - look like parts of different applications.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -24,8 +27,8 @@ from bytesraw_erp.core.errors import BytesrawError
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.widgets.account_card import AccountCard
-from bytesraw_erp.ui.widgets.banner import Banner
 from bytesraw_erp.ui.widgets.icons import icon
+from bytesraw_erp.ui.widgets.page import WIDTH_LIST, PageShell
 
 
 class AccountsPage(QWidget):
@@ -36,20 +39,16 @@ class AccountsPage(QWidget):
         self._context = context
         self._router = router
 
+        self._shell = PageShell(
+            "Accounts",
+            "Open a saved Odoo connection, or change the ones on this computer.",
+            width=WIDTH_LIST,
+            windowed=context.windowed,
+        )
+        self._banner = self._shell.banner
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-
-        container = QWidget()
-        container.setMaximumWidth(720)
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 28, 24, 28)
-        layout.setSpacing(16)
-
-        header = QHBoxLayout()
-        title = QLabel("Accounts")
-        title.setObjectName("PageTitle")
-        header.addWidget(title)
-        header.addStretch(1)
+        outer.addWidget(self._shell)
 
         add_button = QPushButton("Add account")
         # Explicitly the button's own foreground, not the theme's text colour:
@@ -59,29 +58,19 @@ class AccountsPage(QWidget):
         add_button.setIconSize(QSize(16, 16))
         add_button.setProperty("variant", "primary")
         add_button.clicked.connect(lambda: self._router.go(ROUTE_ACCOUNT_NEW))
-        header.addWidget(add_button)
         self._add_button = add_button
-        layout.addLayout(header)
-
-        self._banner = Banner()
-        layout.addWidget(self._banner)
+        self._shell.add_action(add_button)
 
         self._empty_hint = QLabel(
             "No accounts yet. Add your first Odoo server to get started."
         )
         self._empty_hint.setObjectName("MutedLabel")
-        layout.addWidget(self._empty_hint)
+        self._shell.body.addWidget(self._empty_hint)
 
         self._list_layout = QVBoxLayout()
         self._list_layout.setSpacing(10)
-        layout.addLayout(self._list_layout)
-        layout.addStretch(1)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
+        self._shell.body.addLayout(self._list_layout)
+        self._shell.body.addStretch(1)
 
         context.accounts_changed.connect(self.refresh)
         context.theme.theme_changed.connect(self._on_theme_changed)
@@ -106,6 +95,7 @@ class AccountsPage(QWidget):
         re-render theirs - the list is short, and it is already the path taken
         whenever an account changes.
         """
+        self._shell.apply_theme(palette)  # type: ignore[arg-type]
         self._add_button.setIcon(icon("plus", palette.primary_text))  # type: ignore[attr-defined]
         self.refresh()
 

@@ -430,6 +430,14 @@ QPushButton[variant="link"]:hover {{
 #AccountName {{ font-weight: 600; font-size: 14px; color: {p.text}; }}
 #PageTitle {{ font-size: 24px; font-weight: 700; color: {p.text}; }}
 #PageSubtitle {{ font-size: 13px; color: {p.text_muted}; }}
+/* The band a full-page screen's title, actions and caption buttons sit in.
+   It does not scroll, so it needs a hard bottom edge for the same reason the
+   app bar does: without one, a card scrolling up under it has nothing to
+   disappear behind and appears to be sliding over the title. */
+#PageHeader {{
+    background: {p.app_bar};
+    border-bottom: 1px solid {p.border};
+}}
 #SectionTitle {{ font-size: 15px; font-weight: 600; color: {p.text}; }}
 #Rule {{ background: {p.border}; border: none; }}
 

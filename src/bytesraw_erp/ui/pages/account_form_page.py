@@ -10,27 +10,32 @@ card under the product mark rather than as a bare form: the two connection
 fields and the two credential fields are grouped, each label sits above its
 control so the inputs all share one width, and the build number is on screen
 from the very first launch.
+
+It uses the same :class:`~bytesraw_erp.ui.widgets.page.PageShell` as the account
+list and the settings page, which puts Cancel and "Connect and save" in the
+header band beside the title rather than below the last field. That is the one
+visible change from the old layout, and it is deliberate: the band does not
+scroll, so on a till screen too short for the whole form the submit button is
+always in the same place instead of being somewhere below the fold. Enter in
+the password field still submits, and the button is still this window's default.
 """
 
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from bytesraw_erp.constants import APP_NAME, APP_VERSION, ROUTE_ACCOUNTS, ROUTE_ODOO
+from bytesraw_erp.constants import ROUTE_ACCOUNTS, ROUTE_ODOO
 from bytesraw_erp.core.errors import BytesrawError
 from bytesraw_erp.data.models import Account, normalize_base_url
 from bytesraw_erp.services.odoo_client import OdooClient
@@ -38,13 +43,11 @@ from bytesraw_erp.services.session_service import open_session
 from bytesraw_erp.services.tasks import run_async
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
-from bytesraw_erp.ui.widgets.banner import Banner
 from bytesraw_erp.ui.widgets.icons import icon
-from bytesraw_erp.ui.widgets.sections import BrandHeader, Card, Field, SectionHeader, rule
+from bytesraw_erp.ui.widgets.page import WIDTH_FORM, PageShell
+from bytesraw_erp.ui.widgets.sections import Card, Field, SectionHeader, rule
 
 _log = logging.getLogger(__name__)
-
-_FORM_WIDTH = 560
 
 
 def _probe_databases(url: str, verify_tls: bool) -> list[str]:
@@ -76,35 +79,21 @@ class AccountFormPage(QWidget):
         #: them while this page is open.
         self._sections: list[SectionHeader] = []
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        container = QWidget()
-        container.setMaximumWidth(_FORM_WIDTH)
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 32, 24, 32)
-        layout.setSpacing(18)
-
-        self._header = BrandHeader(
+        self._shell = PageShell(
             "Add account",
             "Connect to an Odoo 19 server. The password is kept in Windows "
             "Credential Manager, never in a file.",
+            width=WIDTH_FORM,
+            windowed=context.windowed,
         )
-        layout.addWidget(self._header)
+        self._banner = self._shell.banner
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._shell)
 
-        self._banner = Banner()
-        layout.addWidget(self._banner)
-
-        layout.addWidget(self._build_card())
-        layout.addLayout(self._build_actions())
-        layout.addWidget(self._footer())
-        layout.addStretch(1)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
+        self._build_actions()
+        self._shell.body.addWidget(self._build_card())
+        self._shell.body.addStretch(1)
 
         context.theme.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(context.theme.palette)
@@ -185,28 +174,27 @@ class AccountFormPage(QWidget):
         )
         return card
 
-    def _build_actions(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    def _build_actions(self) -> None:
+        """Cancel and submit, in the header band rather than under the form.
+
+        The build number that used to sit in a footer here is gone with it: the
+        shell's own header already carries a version badge, and two statements
+        of the same number on one screen is one more than is useful.
+        """
         self._cancel = QPushButton("Cancel")
         self._cancel.clicked.connect(self._on_cancel)
-        row.addWidget(self._cancel)
-        row.addStretch(1)
+        self._shell.add_action(self._cancel)
+
         self._submit_button = QPushButton("Connect and save")
         self._submit_button.setProperty("variant", "primary")
         self._submit_button.setDefault(True)
         self._submit_button.clicked.connect(self._submit)
-        row.addWidget(self._submit_button)
-        return row
-
-    def _footer(self) -> QLabel:
-        label = QLabel(f"{APP_NAME} {APP_VERSION}")
-        label.setObjectName("FieldHint")
-        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        return label
+        self._shell.add_action(self._submit_button)
 
     # -- theme -------------------------------------------------------------
 
     def _on_theme_changed(self, palette: object) -> None:
+        self._shell.apply_theme(palette)  # type: ignore[arg-type]
         for section in self._sections:
             section.apply_theme(palette)  # type: ignore[arg-type]
         self._sync_reveal_icon()
@@ -220,7 +208,7 @@ class AccountFormPage(QWidget):
 
         prefill = None
         if self._editing is None:
-            self._header.set_title("Add account")
+            self._shell.set_title("Add account")
             self._reset_fields()
             # An account the server rejected was just deleted; its connection
             # details are still worth keeping so only the password is retyped.
@@ -228,7 +216,7 @@ class AccountFormPage(QWidget):
             if prefill is not None:
                 self._fill_from(prefill, with_password=False)
         else:
-            self._header.set_title("Edit account")
+            self._shell.set_title("Edit account")
             self._fill_from(self._editing)
 
         notice = self._context.take_notice()

@@ -7,11 +7,19 @@ or lose the app behind Explorer mid-transaction. Full screen also covers the
 Windows taskbar, so the only chrome on the display is the app's own.
 
 The cost of that is the title bar, and with it the minimise and close buttons.
-They come back as :class:`WindowControls` inside the app bar. The pages that
-carry no app bar - the account list, the account form, the settings page - get
-the floating set this window owns, because a first launch with no saved account
-lands on the account form, and a screen with no way to quit the application is
-not a screen this app is allowed to show.
+They come back as :class:`WindowControls` inside the app bar, and inside the
+header band of every page built on
+:class:`~bytesraw_erp.ui.widgets.page.PageShell` - the account list, the
+account form and the settings page - so the caption buttons are in the same
+corner of every screen in the product.
+
+The floating set this window owns is the net under that, not the normal path.
+It appears only over a page that provides no controls of its own, because a
+first launch with no saved account lands on the account form and a screen with
+no way to quit the application is not a screen this app is allowed to show. In
+the shipped routes nothing reaches it any more; it stays because the cost of
+keeping it is a hidden QFrame and the cost of being wrong about it is a till
+that cannot be closed.
 
 Launching with ``--windowed`` suspends all of that: the window keeps its frame,
 keeps its taskbar button, and the caption buttons grow a full-screen toggle,
@@ -207,12 +215,16 @@ class MainWindow(QMainWindow):
     # -- floating window controls ------------------------------------------
 
     def _build_overlay(self) -> QFrame:
-        """The minimise/close pair for pages that have no app bar of their own.
+        """The minimise/close pair for a page that carries none of its own.
 
         A child of the window rather than of a page, so it is positioned
-        against the physical top-right corner. The pages are centred columns
-        inside a scroll area; controls placed in one of those would drift
-        towards the middle of the screen and scroll away with the content.
+        against the physical top-right corner. This is why a page's own set has
+        to sit in a band that spans the window and does not scroll, rather than
+        in the centred column of content: controls placed in that column would
+        drift towards the middle of a wide screen and scroll away with the
+        cards. :class:`~bytesraw_erp.ui.widgets.page.PageShell` puts them in
+        the band for exactly that reason, and ``_sync_overlay`` then leaves
+        this pair hidden.
         """
         frame = QFrame(self)
         frame.setObjectName("WindowControlsOverlay")

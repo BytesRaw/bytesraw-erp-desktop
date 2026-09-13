@@ -23,6 +23,17 @@ Each group is a card with a badged header, so the page reads as a short list of
 decisions rather than one long list of controls. The About card is the honest home for
 the build number, the settings file and the folders the app writes to - the
 things a user is asked for when they report a problem.
+
+The cards sit in **two columns** on a wide screen and one on a narrow one, and
+the header does not scroll. Both come from :mod:`..widgets.page`. Together they
+are what fits the whole page on a till screen without scrolling at all: five
+cards stacked in one column ran to roughly twice the height of a 1080p display,
+so "Done" - the way out - and the banner that reports what was just saved were
+both off-screen for most of the page's length.
+
+Which card goes in which column is declared, not measured. Appearance, Display
+and Printing are the machine's own settings and stay together on the left;
+Updates and About are about the build and stay together on the right.
 """
 
 from __future__ import annotations
@@ -39,7 +50,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -60,12 +70,11 @@ from bytesraw_erp.services.update_service import Update, is_installed_build
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.theme import Palette, Theme
-from bytesraw_erp.ui.widgets.banner import Banner
-from bytesraw_erp.ui.widgets.sections import BrandHeader, Card, Field, SectionHeader, hint
+from bytesraw_erp.ui.widgets.page import WIDTH_WIDE, CardColumns, PageShell
+from bytesraw_erp.ui.widgets.sections import Card, Field, SectionHeader, hint
 
 _log = logging.getLogger(__name__)
 
-_PAGE_WIDTH = 680
 #: A combo holding two words should not run the width of the card.
 _CONTROL_WIDTH = 240
 _WIDE_CONTROL = 420
@@ -108,45 +117,30 @@ class SettingsPage(QWidget):
         #: agree with each other and survive leaving and re-entering the page.
         self._pending: Update | None = None
 
+        self._shell = PageShell(
+            "Settings",
+            "Appearance, display, printing and updates, for this computer.",
+            width=WIDTH_WIDE,
+            windowed=context.windowed,
+        )
+        self._banner = self._shell.banner
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._shell)
 
-        container = QWidget()
-        container.setMaximumWidth(_PAGE_WIDTH)
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 32, 24, 32)
-        layout.setSpacing(18)
-
-        header = QHBoxLayout()
-        header.setSpacing(16)
-        header.addWidget(
-            BrandHeader(
-                "Settings",
-                "Appearance, display, printing and updates, for this computer.",
-            ),
-            1,
-        )
         self._close = QPushButton("Done")
         self._close.setProperty("variant", "primary")
         self._close.clicked.connect(self._on_done)
-        header.addWidget(self._close, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(header)
+        self._shell.add_action(self._close)
 
-        self._banner = Banner()
-        layout.addWidget(self._banner)
-
-        layout.addWidget(self._build_appearance_card())
-        layout.addWidget(self._build_display_card())
-        layout.addWidget(self._build_printing_card())
-        layout.addWidget(self._build_updates_card())
-        layout.addWidget(self._build_about_card())
-        layout.addStretch(1)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
+        self._columns = CardColumns()
+        self._columns.add_card(self._build_appearance_card(), column=0)
+        self._columns.add_card(self._build_display_card(), column=0)
+        self._columns.add_card(self._build_printing_card(), column=0)
+        self._columns.add_card(self._build_updates_card(), column=1)
+        self._columns.add_card(self._build_about_card(), column=1)
+        self._shell.body.addWidget(self._columns)
+        self._shell.body.addStretch(1)
 
         context.theme.theme_changed.connect(self._apply_theme)
         self._apply_theme(context.theme.palette)
@@ -358,6 +352,7 @@ class SettingsPage(QWidget):
     # -- theme -------------------------------------------------------------
 
     def _apply_theme(self, palette: Palette) -> None:
+        self._shell.apply_theme(palette)
         for section in self._sections:
             section.apply_theme(palette)
 
