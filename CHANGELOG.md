@@ -11,6 +11,33 @@ workflow refuses to build a tag that disagrees with it.
 > Their entries are reconstructed from `ROADMAP.md` and dated by commit, and no
 > binaries were distributed for them.
 
+## [0.1.10] - unreleased
+
+### Added
+
+- **One layout for every screen outside Odoo.** The account list, the account
+  form and the settings page now share a header that stays put while the page
+  scrolls, carrying the product mark, the screen's title, the build badge and
+  that screen's actions. The minimise and close buttons sit in that header on
+  every screen, in the same corner the app bar puts them in.
+- **Two-column settings** on a wide screen, collapsing to one on a narrow one,
+  so the whole page fits without scrolling.
+
+### Changed
+
+- The account form's **Cancel** and **Connect and save** moved from below the
+  last field into the header, where they stay in view on a short screen. Enter
+  in the password field still submits.
+
+### Fixed
+
+- **Checking for updates on the Beta channel no longer reports an error.** No
+  pre-release has been published yet, so the beta manifest does not exist and
+  the host answers 404 - which is what an empty channel looks like, not a
+  fault. Settings now says nothing has been published to that channel instead
+  of showing "The update service answered HTTP 404". A missing manifest that a
+  redirect pointed at is still reported as the error it is.
+
 ## [0.1.9] - 2026-09-13
 
 ### Added
@@ -186,6 +213,7 @@ the web client under a native app bar.
 - A native app bar carrying the product mark, the build number, navigation, the
   signed-in user and the interface language.
 
+[0.1.10]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.9...HEAD
 [0.1.9]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/BytesRaw/bytesraw-erp-desktop/releases/tag/v0.1.7
