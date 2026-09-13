@@ -10,7 +10,7 @@ from typing import Final
 
 #: Window title and QApplication name.
 APP_NAME: Final[str] = "Bytesraw ERP"
-APP_VERSION: Final[str] = "0.1.8"
+APP_VERSION: Final[str] = "0.1.9"
 
 ORG_NAME: Final[str] = "BytesRaw"
 ORG_DOMAIN: Final[str] = "bytesraw.com"

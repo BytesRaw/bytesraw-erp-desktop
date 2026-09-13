@@ -11,7 +11,7 @@ workflow refuses to build a tag that disagrees with it.
 > Their entries are reconstructed from `ROADMAP.md` and dated by commit, and no
 > binaries were distributed for them.
 
-## [Unreleased]
+## [0.1.9] - 2026-09-13
 
 ### Added
 
@@ -33,7 +33,7 @@ workflow refuses to build a tag that disagrees with it.
   below the manifest's `minimum_supported` floor, or marked mandatory, ignores
   the rollout - as does a check the user asked for by hand.
 
-## [0.1.8] - unreleased
+## [0.1.8] - 2026-09-12
 
 ### Added
 
@@ -186,5 +186,6 @@ the web client under a native app bar.
 - A native app bar carrying the product mark, the build number, navigation, the
   signed-in user and the interface language.
 
-[0.1.8]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.7...HEAD
+[0.1.9]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/BytesRaw/bytesraw-erp-desktop/releases/tag/v0.1.7

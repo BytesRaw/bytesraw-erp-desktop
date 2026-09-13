@@ -34,7 +34,7 @@ Windows builds are attached to every
 | `SHA256SUMS.txt` | Checking a download before you run it. |
 
 ```powershell
-Get-FileHash .\BytesrawERP-0.1.8-setup.exe -Algorithm SHA256
+Get-FileHash .\BytesrawERP-<version>-setup.exe -Algorithm SHA256
 ```
 
 **Releases are not yet code-signed**, so Windows SmartScreen will warn on
