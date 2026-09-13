@@ -555,9 +555,20 @@ class SettingsPage(QWidget):
         skipped - there is no installed copy to replace - and a card claiming to
         check automatically while nothing ever checked is a lie that costs a
         developer an afternoon.
+
+        So is an empty channel. One manifest file per channel means a channel
+        nobody has released to has no file at all, and saying "up to date" there
+        would claim this build was compared against something when nothing was
+        published to compare it with.
         """
         checked = self._context.settings.updates.last_check_at
         when = f"Last checked {_describe_age(checked)}." if checked else "Not checked yet."
+        if self._context.updates.channel_empty:
+            channel = self._context.settings.updates.channel.value
+            return (
+                f"{when} Nothing has been published to the {channel} channel "
+                f"yet, so this computer stays on {APP_NAME} {APP_VERSION}."
+            )
         if not is_installed_build():
             return (
                 f"{when} This is a development build, so automatic checks are "

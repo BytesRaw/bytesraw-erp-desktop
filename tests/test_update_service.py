@@ -48,6 +48,7 @@ from bytesraw_erp.services import update_service
 from bytesraw_erp.services.update_service import (
     Update,
     UpdateArtifact,
+    UpdateChannelEmpty,
     download_update,
     fetch_update,
     installer_path,
@@ -298,9 +299,37 @@ def test_an_oversized_body_is_refused(host: str) -> None:
         fetch_update(current_version="0.1.8")
 
 
-def test_a_missing_manifest_reports_the_status(host: str) -> None:
-    with pytest.raises(UpdateError, match="HTTP 404"):
+def test_a_channel_with_no_manifest_is_empty_not_broken(host: str) -> None:
+    """One manifest per channel means an unreleased channel has no file at all.
+
+    This is what a till switched to Beta actually met against the live host:
+    nothing has ever been pre-released, so ``beta.json`` does not exist and
+    GitHub Pages answers 404. Reporting that as "The update service answered
+    HTTP 404" put a red error banner over a system working exactly as designed.
+    """
+    with pytest.raises(UpdateChannelEmpty, match="No stable releases"):
         fetch_update(current_version="0.1.8")
+
+
+def test_an_empty_channel_is_still_an_update_error(host: str) -> None:
+    """Anything that only catches ``UpdateError`` must still get a sentence."""
+    with pytest.raises(UpdateError) as caught:
+        fetch_update(current_version="0.1.8")
+    assert "nothing to update to" in str(caught.value)
+
+
+def test_a_missing_manifest_after_a_hop_is_a_broken_chain(host: str) -> None:
+    """A 404 the client was *sent* to is a misconfiguration, not an empty channel.
+
+    The distinction is the whole point of passing ``empty_message`` for the
+    first fetch only: the channel URL is compiled into the binary and may
+    legitimately not exist yet, but a ``next_manifest_url`` is a host saying
+    "look over there", and nothing being there is a genuine fault.
+    """
+    _publish(host, next_manifest_url=f"{host}/erp/moved.json")
+    with pytest.raises(UpdateError, match="HTTP 404") as caught:
+        fetch_update(current_version="0.1.8")
+    assert not isinstance(caught.value, UpdateChannelEmpty)
 
 
 # --- the next_manifest_url chain -------------------------------------------
@@ -597,3 +626,71 @@ def test_an_unknown_channel_falls_back_to_stable() -> None:
 def test_an_unreadable_last_check_is_treated_as_never() -> None:
     assert UpdateSettings(last_check="whenever").last_check_at is None
     assert UpdateSettings().last_check_at is None
+
+
+# --- the service's reading of an empty channel ------------------------------
+
+
+def test_the_service_treats_an_empty_channel_as_no_news(
+    host: str, tmp_path: Path, qtbot
+) -> None:
+    """It reports ``up_to_date``, never ``check_failed``.
+
+    ``check_failed`` is what the settings page turns into a red banner, and on
+    a till moved to Beta - a channel nothing has ever been published to - that
+    banner was the only thing the user saw. The check itself succeeded: it
+    reached the host and got a straight answer.
+    """
+    from bytesraw_erp.data.settings_store import SettingsStore
+    from bytesraw_erp.services.update_service import UpdateService
+
+    settings = SettingsStore(tmp_path / "settings.json")
+    settings.load()
+    service = UpdateService(settings)
+
+    failures: list[str] = []
+    service.check_failed.connect(failures.append)
+    with qtbot.waitSignal(service.up_to_date, timeout=5000):
+        service.check(manual=True)
+
+    assert failures == []
+    assert service.channel_empty is True
+    assert service.available is None
+    # The check happened, so the card may honestly say when it last looked.
+    assert settings.updates.last_check_at is not None
+
+
+def test_a_real_answer_clears_the_empty_flag(host: str, tmp_path: Path, qtbot) -> None:
+    """Otherwise a till switched back to a live channel keeps reporting emptiness."""
+    from bytesraw_erp.data.settings_store import SettingsStore
+    from bytesraw_erp.services.update_service import UpdateService
+
+    settings = SettingsStore(tmp_path / "settings.json")
+    settings.load()
+    service = UpdateService(settings)
+
+    with qtbot.waitSignal(service.up_to_date, timeout=5000):
+        service.check(manual=True)
+    assert service.channel_empty is True
+
+    _publish(host, version="9.9.9")
+    with qtbot.waitSignal(service.update_available, timeout=5000):
+        service.check(manual=True)
+
+    assert service.channel_empty is False
+    assert service.available is not None
+
+
+def test_switching_channel_drops_the_empty_flag(tmp_path: Path, qtbot) -> None:
+    """It described the channel the user has just left."""
+    from bytesraw_erp.data.settings_store import SettingsStore
+    from bytesraw_erp.services.update_service import UpdateService
+
+    settings = SettingsStore(tmp_path / "settings.json")
+    settings.load()
+    service = UpdateService(settings)
+    service._channel_empty = True
+
+    service.apply_settings()
+
+    assert service.channel_empty is False

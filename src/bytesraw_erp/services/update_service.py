@@ -48,6 +48,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 from urllib.parse import urlparse
 
 import httpx
@@ -94,6 +95,7 @@ _USER_AGENT = f"BytesrawERP/{APP_VERSION} (+https://bytesraw.com)"
 __all__ = [
     "Update",
     "UpdateArtifact",
+    "UpdateChannelEmpty",
     "UpdateError",
     "UpdateService",
     "download_update",
@@ -108,6 +110,23 @@ __all__ = [
 
 class _Cancelled(Exception):
     """Internal: the caller asked for the download to stop. Never shown."""
+
+
+class UpdateChannelEmpty(UpdateError):
+    """The channel has no manifest, because nothing has been published to it.
+
+    One file per channel is what makes a beta impossible to publish into the
+    path stable clients read - and the price of that is that a channel nobody
+    has released to yet simply has no file, so the host answers 404. That is
+    the *normal* state of a new channel, not a failure: nothing is wrong, there
+    is just nothing on offer.
+
+    It is a subclass so that a caller which does not care still gets a sentence
+    an end user can read, and so that it can never be mistaken for a manifest
+    that was fetched successfully. Only the channel's own URL may raise it - a
+    404 on a ``next_manifest_url`` is a genuinely broken chain, and the
+    distinction is in :func:`_resolve_manifest`.
+    """
 
 
 # --- the manifest ----------------------------------------------------------
@@ -275,22 +294,34 @@ def _parse_manifest(payload: object, channel: UpdateChannel) -> Update:
     )
 
 
-def _get_manifest(url: str, client: httpx.Client) -> dict[str, object]:
+#: Statuses that mean "there is no such document", as opposed to "the request
+#: went wrong". A channel nobody has published to has no manifest at all, so
+#: this is what an empty channel looks like from the client.
+_MISSING_STATUSES: Final[frozenset[int]] = frozenset({404, 410})
+
+
+def _get_manifest(
+    url: str, client: httpx.Client, *, empty_message: str = ""
+) -> dict[str, object]:
     """Fetch one manifest document.
 
     ``follow_redirects`` matters more than it looks: GitHub Pages answers a
     ``github.io`` address with a permanent redirect once a custom domain is
     bound, so a client compiled against the old URL keeps working after the
     move - which is half of why starting there was safe.
+
+    ``empty_message`` is passed only for a channel's own URL, and turns a 404
+    into :class:`UpdateChannelEmpty` rather than an error. See that class.
     """
     try:
         response = client.get(url)
         response.raise_for_status()
         body = response.content[: UPDATE_MANIFEST_MAX_BYTES + 1]
     except httpx.HTTPStatusError as exc:
-        raise UpdateError(
-            f"The update service answered HTTP {exc.response.status_code}."
-        ) from exc
+        status = exc.response.status_code
+        if empty_message and status in _MISSING_STATUSES:
+            raise UpdateChannelEmpty(empty_message) from exc
+        raise UpdateError(f"The update service answered HTTP {status}.") from exc
     except httpx.HTTPError as exc:
         raise UpdateError(f"Could not reach the update service: {exc}") from exc
 
@@ -335,8 +366,15 @@ def _resolve_manifest(
     """
     url = manifest_url(channel)
     seen = {url}
+    # Only the first fetch may report an empty channel. After a hop the client
+    # has been *told* where to look, so a missing document there is a broken
+    # chain and has to be reported as the error it is.
+    empty = (
+        f"No {channel.value} releases have been published yet, so there is "
+        "nothing to update to."
+    )
     for _hop in range(UPDATE_MAX_HOPS + 1):
-        payload = _get_manifest(url, client)
+        payload = _get_manifest(url, client, empty_message=empty if not _hop else "")
         following = payload.get("next_manifest_url")
         if not following or not isinstance(following, str):
             return payload, url
@@ -350,6 +388,30 @@ def _resolve_manifest(
         seen.add(following)
         url = following
     raise UpdateError("The update service redirected too many times.")
+
+
+#: What :func:`_look_for_update` returns instead of raising when the channel has
+#: nothing published. A sentinel rather than ``None``, because ``None`` already
+#: means "this build is current" and the card says something different for each.
+_CHANNEL_EMPTY: Final[object] = object()
+
+
+def _look_for_update(*args: object, **kwargs: object) -> object:
+    """:func:`fetch_update`, with an empty channel turned into a return value.
+
+    Only :class:`UpdateService` uses this, and only because ``run_async`` logs
+    a full traceback for anything that raises. An empty channel is a supported
+    configuration - a till following Beta before the first pre-release - and a
+    stack trace under "Background task fetch_update failed" every four hours is
+    exactly the sort of thing that sends somebody reading a till's log chasing
+    a fault that is not there. ``fetch_update`` itself keeps raising: for every
+    other caller an exception is the honest answer.
+    """
+    try:
+        return fetch_update(*args, **kwargs)  # type: ignore[arg-type]
+    except UpdateChannelEmpty as exc:
+        _log.info("Update check: %s", exc)
+        return _CHANNEL_EMPTY
 
 
 def rollout_bucket(install_id: str, version: str) -> int:
@@ -789,6 +851,10 @@ class UpdateService(QObject):
         #: The release last found, so a page opened afterwards can still show
         #: it without asking the network again.
         self._available: Update | None = None
+        #: Set when the channel has no manifest at all. Distinct from "up to
+        #: date": this build is not current, there is simply nothing published
+        #: to compare it with, and a card saying "up to date" would be a lie.
+        self._channel_empty = False
         self._checking = False
         self._downloading = False
         #: Polled by the download worker every chunk. Raised on shutdown, which
@@ -808,6 +874,11 @@ class UpdateService(QObject):
     @property
     def available(self) -> Update | None:
         return self._available
+
+    @property
+    def channel_empty(self) -> bool:
+        """Whether the last check found the channel had nothing published."""
+        return self._channel_empty
 
     @property
     def busy(self) -> bool:
@@ -850,7 +921,14 @@ class UpdateService(QObject):
         self.check()
 
     def apply_settings(self) -> None:
-        """Re-read the stored settings after the user has changed them."""
+        """Re-read the stored settings after the user has changed them.
+
+        The emptiness flag is dropped here for the same reason the settings
+        page drops the pending release: both describe the *other* channel the
+        moment the user switches, and a card still reporting "no beta releases"
+        over a stable install has outlived its answer.
+        """
+        self._channel_empty = False
         wanted = self._settings.updates.check_automatically and is_installed_build()
         if wanted and not self._timer.isActive():
             self._timer.start()
@@ -887,7 +965,12 @@ class UpdateService(QObject):
         def found(update: object) -> None:
             self._checking = False
             self._settings.record_update_check()
-            if update is None:
+            # An empty channel is news of a sort - the check reached the host
+            # and got a straight answer - so it counts as a check and reports
+            # "no news", never a failure. It is not "up to date" either, which
+            # is why it has a flag of its own rather than folding into None.
+            self._channel_empty = update is _CHANNEL_EMPTY
+            if update is None or self._channel_empty:
                 self._available = None
                 self.up_to_date.emit()
                 return
@@ -904,7 +987,7 @@ class UpdateService(QObject):
             self.check_failed.emit(str(exc))
 
         run_async(
-            fetch_update,
+            _look_for_update,
             channel,
             current_version=APP_VERSION,
             install_id=install_id,
