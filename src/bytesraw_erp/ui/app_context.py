@@ -20,6 +20,7 @@ from bytesraw_erp.services.odoo_client import OdooClient
 from bytesraw_erp.services.print_service import PrintService
 from bytesraw_erp.services.profile_manager import ProfileManager
 from bytesraw_erp.services.tasks import shutdown as shutdown_tasks
+from bytesraw_erp.services.update_service import UpdateService
 from bytesraw_erp.ui.theme import ThemeController
 
 _log = logging.getLogger(__name__)
@@ -57,6 +58,10 @@ class AppContext(QObject):
         #: the file is read once and one object answers for it. A caller that
         #: does not care (a test, a page harness) gets a fresh one.
         self.settings = settings or SettingsStore()
+        #: Checks the update host on a timer and downloads a new build when
+        #: asked. Lives here because two screens are projections of it: the
+        #: Odoo page raises the toast, the settings page owns the controls.
+        self.updates = UpdateService(self.settings, self)
         self.theme = theme
         self._account: Account | None = None
         self._session: SessionContext | None = None
@@ -117,15 +122,19 @@ class AppContext(QObject):
     def shutdown(self) -> None:
         """Release everything, in the order the teardown has to happen in.
 
-        Background work first: a queued RPC call that lands after this point
-        has nothing left to deliver to, and Qt's global thread pool is waited
-        on at process exit - so a job accepted now is time the user spends
-        watching a window that has already gone.
+        The update service goes first, before even the task gate. Cancelling
+        a task's callbacks stops anyone *waiting* for a result, but the worker
+        streaming a 140 MB installer carries on regardless, and Qt waits on its
+        thread pool at process exit - so without the download being told to give
+        up, quitting mid-update means watching a gone window for the rest of the
+        transfer. Then background work in general: a queued RPC call that lands
+        after this point has nothing left to deliver to.
 
         Profiles last, and only after the pages holding them have released
         their web views, which :class:`~bytesraw_erp.ui.main_window.MainWindow`
         arranges. Idempotent: the close path and ``aboutToQuit`` both call it.
         """
+        self.updates.shutdown()
         shutdown_tasks()
         self.release_session()
         self.profiles.shutdown()

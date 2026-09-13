@@ -7,7 +7,7 @@ over a download: a file saved from the chatter simply appeared to do nothing.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QPushButton, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from bytesraw_erp.ui.widgets.toast import Toast, ToastArea
 
@@ -107,3 +107,32 @@ def test_hovering_stops_the_countdown(host: QWidget, qtbot) -> None:
     toast.enterEvent(QEnterEvent(centre, centre, centre))
     qtbot.wait(300)
     assert toast.isVisible()
+
+
+def test_a_toast_can_be_rewritten_in_place(host: QWidget, qtbot) -> None:
+    """A download reports progress by editing one toast, not stacking dozens."""
+    area = ToastArea(host)
+    toast = area.show_message("Downloading the update...", linger_ms=60_000)
+
+    area.update_message(toast, "Downloading the update... 40%")
+    qtbot.wait(50)
+
+    assert len(area._toasts) == 1
+    assert toast.findChild(QLabel).text() == "Downloading the update... 40%"
+
+
+def test_a_long_linger_outlives_the_default(host: QWidget, qtbot) -> None:
+    """An update is a decision, so its toast must not fade like a notice.
+
+    Asserted on the countdown rather than by waiting for one toast to vanish,
+    and deliberately so: showing a second toast re-lays out the stack, and a
+    toast that Qt moves under the developer's actual mouse pointer receives an
+    enter event, which stops its countdown. A wait-based version of this test
+    passes or fails depending on where the cursor is sitting - measured.
+    """
+    area = ToastArea(host)
+    brief = area.show_message("Saved invoice.pdf")
+    lasting = area.show_message("Bytesraw ERP 0.2.0 is available.", linger_ms=60_000)
+
+    assert lasting._dismiss_timer.remainingTime() > brief._dismiss_timer.remainingTime()
+    assert lasting._dismiss_timer.remainingTime() > 30_000

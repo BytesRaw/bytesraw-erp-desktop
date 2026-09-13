@@ -130,6 +130,11 @@ _PATHS: dict[str, str] = {
     # Drawn at the same 1.8 stroke as everything else rather than at the
     # hairline Windows uses, so they sit in the app bar as siblings of the
     # navigation icons instead of reading as a foreign caption strip.
+    "download": (
+        '<path d="M12 3v12"/>'
+        '<path d="m7 10.5 5 5 5-5"/>'
+        '<path d="M4 20h16"/>'
+    ),
     "minimize": '<path d="M5 12h14"/>',
     "close": '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
     # Corner brackets rather than the hollow square Windows uses for maximise:

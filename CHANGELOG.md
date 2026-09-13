@@ -11,6 +11,28 @@ workflow refuses to build a tag that disagrees with it.
 > Their entries are reconstructed from `ROADMAP.md` and dated by commit, and no
 > binaries were distributed for them.
 
+## [Unreleased]
+
+### Added
+
+- **In-app updates.** Bytesraw ERP now checks a BytesRaw-hosted manifest on
+  launch and every few hours, and offers a new version in a toast. Choosing to
+  update downloads the installer, verifies its SHA-256, and hands it to
+  `setup.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS` - Inno's Restart
+  Manager then closes the app, upgrades it in place and starts it again.
+  Nothing is ever downloaded or installed without the user choosing to.
+- **Settings -> Updates**: automatic checking, the release channel (stable or
+  beta), a "check now" that reports back, and release notes.
+- **Authenticode verification** of a downloaded installer, enforced whenever the
+  manifest says the artifact is signed. It says `false` today because signing
+  is still waiting on a certificate, so enforcement begins with a manifest edit
+  rather than a new release.
+- **Staged rollouts.** A manifest can offer a release to a percentage of
+  installations. Each machine works out its own place from a random local id,
+  so the update host needs no telemetry and no idea who is asking. A release
+  below the manifest's `minimum_supported` floor, or marked mandatory, ignores
+  the rollout - as does a check the user asked for by hand.
+
 ## [0.1.8] - unreleased
 
 ### Added

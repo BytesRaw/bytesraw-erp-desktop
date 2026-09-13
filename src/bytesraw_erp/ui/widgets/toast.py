@@ -61,10 +61,10 @@ class Toast(QWidget):
         layout.setContentsMargins(14, 11, 10, 11)
         layout.setSpacing(12)
 
-        label = QLabel(message)
-        label.setObjectName("ToastText")
-        label.setWordWrap(True)
-        layout.addWidget(label, 1)
+        self._label = QLabel(message)
+        self._label.setObjectName("ToastText")
+        self._label.setWordWrap(True)
+        layout.addWidget(self._label, 1)
 
         if action_text and on_action is not None:
             button = QPushButton(action_text)
@@ -84,6 +84,28 @@ class Toast(QWidget):
 
         self._fade_timer = QTimer(self)
         self._fade_timer.timeout.connect(self._step_fade)
+
+    def set_message(self, message: str, linger_ms: int | None = None) -> None:
+        """Replace the text in place, rather than stacking another toast.
+
+        A download that takes two minutes needs to say so as it goes, and a new
+        toast per percentage point would bury the screen. Go through
+        :meth:`ToastArea.update_message` so the stack is re-laid out too - the
+        new text can be a different height.
+
+        ``linger_ms`` restarts the countdown, and also cancels a fade already in
+        progress. That is what lets a long-lived toast be turned into a short
+        one: a download that fails has to say why, and dismissing the download
+        toast instead would leave it fading on screen for a third of a second
+        beside the message explaining that it stopped.
+        """
+        self._label.setText(message)
+        self.adjustSize()
+        if linger_ms is None:
+            return
+        self._fade_timer.stop()
+        self._effect.setOpacity(1.0)
+        self._dismiss_timer.start(linger_ms)
 
     def _run_action(self, on_action: Callable[[], None]) -> Callable[[], None]:
         def run() -> None:
@@ -146,12 +168,21 @@ class ToastArea(QObject):
         *,
         action_text: str = "",
         on_action: Callable[[], None] | None = None,
+        linger_ms: int = _LINGER_MS,
     ) -> Toast:
+        """Float a notification over the host.
+
+        ``linger_ms`` exists for the one message that is worth more than six
+        seconds: an update being offered is a decision, not an acknowledgement,
+        and a toast that has faded before the user finished reading it is a
+        decision they were never actually given.
+        """
         toast = Toast(
             self._host,
             message,
             action_text=action_text,
             on_action=on_action,
+            linger_ms=linger_ms,
         )
         toast.closed.connect(lambda: self._forget(toast))
         self._toasts.append(toast)
@@ -166,6 +197,13 @@ class ToastArea(QObject):
         toast.raise_()
         self._relayout()
         return toast
+
+    def update_message(
+        self, toast: Toast, message: str, linger_ms: int | None = None
+    ) -> None:
+        """Rewrite a toast that is already on screen, and re-stack the rest."""
+        toast.set_message(message, linger_ms)
+        self._relayout()
 
     def _forget(self, toast: Toast) -> None:
         if toast in self._toasts:

@@ -47,6 +47,8 @@ from PySide6.QtWidgets import (
 )
 
 from bytesraw_erp.constants import (
+    APP_NAME,
+    APP_VERSION,
     ODOO_HOME_PATH,
     ODOO_LOGIN_PATH,
     ROUTE_ACCOUNT_NEW,
@@ -70,15 +72,24 @@ from bytesraw_erp.services.session_service import (
     set_user_language,
 )
 from bytesraw_erp.services.tasks import run_async
+from bytesraw_erp.services.update_service import Update
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.theme import Palette
 from bytesraw_erp.ui.widgets.app_bar import AppBar
 from bytesraw_erp.ui.widgets.banner import Banner
-from bytesraw_erp.ui.widgets.toast import ToastArea
+from bytesraw_erp.ui.widgets.toast import Toast, ToastArea
 from bytesraw_erp.ui.widgets.web_view import OdooWebView
 
 _log = logging.getLogger(__name__)
+
+#: An update toast is a decision, not an acknowledgement, so it stays long
+#: enough to be read and acted on rather than fading like a download notice.
+_UPDATE_TOAST_MS = 30_000
+#: The download toast has to outlive a 140 MB transfer on a till's connection.
+#: It is dismissed explicitly when the download ends, in either direction, so
+#: this is only the backstop for a transfer that stalls without erroring.
+_DOWNLOAD_TOAST_MS = 30 * 60 * 1000
 
 
 class OdooPage(QWidget):
@@ -104,6 +115,9 @@ class OdooPage(QWidget):
         #: another expired session is not going to be fixed by a third attempt,
         #: and a page that keeps signing itself in is a page in a loop.
         self._recovery_spent = False
+        #: The download toast, kept so its text can be rewritten as the
+        #: transfer proceeds instead of stacking one toast per percent.
+        self._update_toast: Toast | None = None
 
         #: Liveness probe and keepalive in one. Started when a session is
         #: adopted, stopped whenever there is none - a timer firing RPC calls
@@ -144,6 +158,15 @@ class OdooPage(QWidget):
         context.printing.finished.connect(self._on_print_finished)
         context.profiles.report_downloaded.connect(self._on_report_downloaded)
         context.profiles.file_downloaded.connect(self._on_file_downloaded)
+        # A failed *check* is deliberately not connected: a till between access
+        # points fails one every four hours, and a toast each time would teach
+        # the user to ignore toasts. The settings page is where a check that
+        # was asked for reports back.
+        context.updates.update_available.connect(self._on_update_available)
+        context.updates.download_started.connect(self._on_update_download_started)
+        context.updates.download_progress.connect(self._on_update_progress)
+        context.updates.download_finished.connect(self._on_update_installing)
+        context.updates.download_failed.connect(self._on_update_failed)
         self._app_bar.apply_theme(context.theme.palette, context.theme.theme)
 
     def _build_status_panel(self) -> QWidget:
@@ -633,6 +656,79 @@ class OdooPage(QWidget):
         # the folder if it is not available.
         if not QProcess.startDetached("explorer", ["/select,", str(path)]):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+    # -- updates -----------------------------------------------------------
+
+    def _on_update_available(self, update: object) -> None:
+        """Offer a newer build. One toast, one action, no dialog.
+
+        Not a modal: the user may be halfway through a sale, and an update is
+        never more important than the transaction in front of them. A required
+        update says so and is still their click to make - forcing a 140 MB
+        download onto a till mid-sale would be the worse failure.
+        """
+        if not isinstance(update, Update):  # pragma: no cover - defensive
+            return
+        message = f"{APP_NAME} {update.version} is available ({update.artifact.size_mb})."
+        if update.is_required_for(APP_VERSION):
+            message += " This update is required."
+        self._toasts.show_message(
+            message,
+            action_text="Update now",
+            on_action=lambda: self._context.updates.download_and_install(update),
+            linger_ms=_UPDATE_TOAST_MS,
+        )
+
+    def _on_update_download_started(self, update: object) -> None:
+        version = update.version if isinstance(update, Update) else ""
+        self._show_update_message(
+            f"Downloading {APP_NAME} {version}...", linger_ms=_DOWNLOAD_TOAST_MS
+        )
+
+    def _on_update_progress(self, received: int, total: int) -> None:
+        if self._update_toast is None:
+            return
+        share = f"{received * 100 // total}%" if total > 0 else ""
+        self._toasts.update_message(
+            self._update_toast, f"Downloading the update... {share}".rstrip()
+        )
+
+    def _on_update_installing(self, _path: object) -> None:
+        """The installer verified and is about to run.
+
+        The app is not quit here, or anywhere: Inno's Restart Manager closes it,
+        replaces the files and starts it again - see
+        :mod:`bytesraw_erp.services.update_service`. All this does is say so,
+        because a till that closes itself with no warning reads as a crash.
+        """
+        # The reference is kept rather than cleared: a declined UAC prompt
+        # arrives as a failure moments later, and that has to replace this
+        # message instead of appearing underneath it.
+        self._show_update_message(f"Installing the update. {APP_NAME} will close and reopen.")
+
+    def _on_update_failed(self, message: str) -> None:
+        self._show_update_message(message)
+        # Terminal, so the toast is let go of: whatever comes next is a new
+        # attempt and deserves its own notification rather than overwriting the
+        # reason the last one stopped.
+        self._update_toast = None
+
+    def _show_update_message(self, message: str, *, linger_ms: int = _UPDATE_TOAST_MS) -> None:
+        """Put ``message`` in the update toast, reusing the one already on screen.
+
+        Dismissing one and showing another looks equivalent and is not: a
+        dismissed toast *fades*, so for a third of a second the stale
+        "Downloading..." would sit next to the message explaining that the
+        download stopped.
+        """
+        if self._update_toast is not None:
+            self._toasts.update_message(self._update_toast, message, linger_ms=linger_ms)
+            return
+        self._update_toast = self._toasts.show_message(message, linger_ms=linger_ms)
+        self._update_toast.closed.connect(self._forget_update_toast)
+
+    def _forget_update_toast(self) -> None:
+        self._update_toast = None
 
     def _on_print_finished(self, ok: bool, message: str) -> None:
         if ok:

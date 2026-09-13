@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -95,6 +96,14 @@ def coerce_print_mode(raw: object) -> PrintMode:
         return PrintMode(str(raw))
     except ValueError:
         return PrintMode.DIALOG
+
+
+def coerce_update_channel(raw: object) -> UpdateChannel:
+    """Tolerate an unknown channel in a hand-edited settings file."""
+    try:
+        return UpdateChannel(str(raw))
+    except ValueError:
+        return UpdateChannel.STABLE
 
 
 def coerce_render_mode(raw: object) -> RenderMode:
@@ -302,4 +311,121 @@ class DisplaySettings:
         return cls(render_mode=coerce_render_mode(raw.get("render_mode")))
 
     def evolve(self, **changes: Any) -> DisplaySettings:
+        return replace(self, **changes)
+
+
+class UpdateChannel(StrEnum):
+    """Which manifest a till follows.
+
+    One file per channel rather than one file with a channel field, so a beta
+    that goes wrong cannot be published into the path stable clients read.
+    """
+
+    STABLE = "stable"
+    BETA = "beta"
+
+    @property
+    def label(self) -> str:
+        return {
+            "stable": "Stable - tested releases only",
+            "beta": "Beta - early releases, for testing",
+        }[self.value]
+
+
+def new_install_id() -> str:
+    """A random id for this installation, used only on this machine.
+
+    Its one job is to give a staged rollout a *stable* answer: without it, a
+    manifest offering an update to 25% of the fleet would re-roll the dice on
+    every check and eventually reach everyone within the hour, which is not a
+    staged rollout at all. It is never sent anywhere - the rollout is decided
+    client-side, which is also why the update host needs no telemetry.
+    """
+    return uuid.uuid4().hex
+
+
+def parse_version(text: object) -> tuple[int, ...]:
+    """Split a dotted version into integers that compare correctly.
+
+    ``"0.10.0" > "0.9.0"`` is the whole point: a string comparison gets that
+    backwards, and a release that looks older than the build it replaces is an
+    update nobody is ever offered. A leading ``v`` is tolerated because tags
+    carry one, and a non-numeric suffix (``0.2.0-rc1``) truncates rather than
+    raising - an unparseable tail must not make the version itself unreadable.
+    """
+    parts: list[int] = []
+    for chunk in str(text or "").strip().lstrip("vV").split("."):
+        digits = ""
+        for char in chunk:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def is_newer_version(candidate: object, current: object) -> bool:
+    """Whether ``candidate`` is a later version than ``current``.
+
+    Padded to a common width so ``0.2`` and ``0.2.0`` are the same release. A
+    candidate that cannot be parsed at all is never an upgrade: offering an
+    update to a version the app cannot even read is worse than offering none.
+    """
+    left, right = parse_version(candidate), parse_version(current)
+    if not left:
+        return False
+    width = max(len(left), len(right))
+    return left + (0,) * (width - len(left)) > right + (0,) * (width - len(right))
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateSettings:
+    """Whether and where this installation looks for a new version.
+
+    App-wide, like :class:`PrintSettings` and :class:`DisplaySettings`: which
+    build a machine runs is a fact about the machine.
+    """
+
+    #: Check on launch and every few hours. Off means the settings page's
+    #: "Check now" is the only thing that ever looks.
+    check_automatically: bool = True
+    channel: UpdateChannel = UpdateChannel.STABLE
+    #: Random, local-only, and stable for the life of the installation - see
+    #: :func:`new_install_id`. Empty until first use.
+    install_id: str = ""
+    #: When the last check finished, ISO-8601 in UTC. Empty means never.
+    #: Stored so the settings page can answer "is this thing even looking?"
+    #: without having to check again to find out.
+    last_check: str = ""
+
+    @property
+    def last_check_at(self) -> datetime | None:
+        """:attr:`last_check` as a datetime, or ``None`` if never or unreadable."""
+        if not self.last_check:
+            return None
+        try:
+            return datetime.fromisoformat(self.last_check)
+        except ValueError:
+            return None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "check_automatically": self.check_automatically,
+            "channel": self.channel.value,
+            "install_id": self.install_id,
+            "last_check": self.last_check,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> UpdateSettings:
+        return cls(
+            check_automatically=bool(raw.get("check_automatically", True)),
+            channel=coerce_update_channel(raw.get("channel")),
+            install_id=str(raw.get("install_id") or ""),
+            last_check=str(raw.get("last_check") or ""),
+        )
+
+    def evolve(self, **changes: Any) -> UpdateSettings:
         return replace(self, **changes)

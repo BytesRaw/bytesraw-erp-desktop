@@ -84,3 +84,53 @@ ROUTE_ACCOUNT_NEW: Final[str] = "/accounts/new"
 ROUTE_ACCOUNT_EDIT: Final[str] = "/accounts/:account_id/edit"
 ROUTE_ODOO: Final[str] = "/odoo"
 ROUTE_SETTINGS: Final[str] = "/settings"
+
+# --- Updates ---------------------------------------------------------------
+# The manifest URL is compiled into every shipped binary and can never be
+# changed for a till already in the field, so it points at a domain BytesRaw
+# owns rather than at the GitHub API or at a github.io address. Artifacts still
+# live on GitHub releases; this indirection is what lets the hosting move later
+# without stranding the installed base - and ``next_manifest_url`` in the
+# manifest is how clients that only know this URL are told to look elsewhere.
+#
+# Served by GitHub Pages out of the ``updates`` orphan branch. The
+# ``bytesraw.github.io`` address still answers and now 301s here, so a binary
+# compiled against the old URL keeps working - verified, not assumed.
+UPDATE_BASE_URL: Final[str] = "https://updates.bytesraw.com/erp"
+
+#: Layout version of the manifest. A manifest declaring a higher one is refused
+#: rather than misread, exactly as ``accounts.json`` and ``settings.json`` are.
+UPDATE_SCHEMA: Final[int] = 1
+
+#: ``product`` a manifest must declare. A redirect that lands on somebody
+#: else's manifest is a configuration error, not an update.
+UPDATE_PRODUCT: Final[str] = "bytesraw-erp"
+
+#: How many ``next_manifest_url`` hops to follow before giving up. Two moves of
+#: the hosting is already more than any installed base should need to chase,
+#: and the cap is what stops a mistyped manifest pointing at itself forever.
+UPDATE_MAX_HOPS: Final[int] = 3
+
+#: A manifest is a few hundred bytes. Anything of this size is not one, and
+#: reading it into memory unbounded is how a wrong URL becomes a hang.
+UPDATE_MANIFEST_MAX_BYTES: Final[int] = 64 * 1024
+
+#: Network timeouts, in seconds. The manifest is small and should answer at
+#: once; the installer is ~140 MB, so its timeout is per-chunk rather than for
+#: the whole transfer - see :mod:`bytesraw_erp.services.update_service`.
+UPDATE_TIMEOUT: Final[float] = 15.0
+UPDATE_DOWNLOAD_TIMEOUT: Final[float] = 60.0
+
+#: Delay before the launch-time check. Sign-in, the first page load and
+#: Chromium's start-up all want the network in the first seconds of a launch,
+#: and an update is never urgent enough to compete with them.
+UPDATE_LAUNCH_DELAY_SECONDS: Final[int] = 40
+
+#: Interval between automatic checks. A till stays open for days at a time, so
+#: "on launch" alone would never see a release.
+UPDATE_CHECK_SECONDS: Final[int] = 4 * 60 * 60
+
+#: Installer copies to keep in the updates cache. One is the update being
+#: offered; the second is there so a failed install can be retried without
+#: fetching 140 MB again.
+UPDATE_KEEP_INSTALLERS: Final[int] = 2

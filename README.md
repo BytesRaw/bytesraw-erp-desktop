@@ -82,6 +82,9 @@ else; Python and Qt are inside the download.
 - **Printing that works the way a desk does.** Choose a printer and whether to
   show the print dialog, once, in Settings. Odoo's own Print button then reaches
   paper instead of dropping a PDF in Downloads.
+- **It updates itself.** A new version announces itself in a notification and
+  installs in place when you accept, with the download checked against a
+  published checksum first.
 
 ## First run
 
@@ -95,14 +98,23 @@ a title bar.
 
 ## Updating
 
-Download a newer installer and run it. It upgrades the existing install in
-place: your accounts, saved passwords, settings and signed-in Odoo sessions are
-untouched, because none of them live beside the executable. Uninstalling asks
-before removing them.
+Bytesraw ERP checks for a new version on launch and every few hours, and tells
+you in a passing notification when there is one. Choosing **Update now**
+downloads the installer, checks it against the checksum published with it, and
+runs it - the app closes, upgrades in place and reopens on its own. Nothing is
+downloaded or installed unless you ask for it.
 
-An in-app update check is on the roadmap (M7.3); until it lands, watch the
-[releases](https://github.com/BytesRaw/bytesraw-erp-desktop/releases) page, or
-the [changelog](CHANGELOG.md).
+**Settings -> Updates** has the controls: turn the automatic check off, switch
+between the stable and beta channels, or check immediately. It also says when it
+last looked, so "is this thing even checking?" has an answer.
+
+Installing by hand still works exactly as before - download a newer installer
+and run it. Either way your accounts, saved passwords, settings and signed-in
+Odoo sessions are untouched, because none of them live beside the executable.
+Uninstalling asks before removing them.
+
+Until code signing is in place, Windows SmartScreen will warn about the
+downloaded installer the same way it warns about the one you fetched by hand.
 
 ## When the Odoo view looks wrong
 

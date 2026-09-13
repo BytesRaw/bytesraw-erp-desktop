@@ -1,4 +1,4 @@
-"""Application settings: appearance, display, printing, and what is stored where.
+"""Application settings: appearance, display, printing, updates, and storage.
 
 Changes apply and save immediately. A settings page with a Save button invites
 the user to close it with unsaved edits; applying on change means the printer
@@ -13,6 +13,12 @@ Chromium's command line is read once, as it starts. That card says so, and the
 page is Qt widgets throughout - which is what makes it readable on the machine
 whose web view is the problem.
 
+The Updates card is the only place a check can be *asked for* rather than
+waited for, and the only place that reports one. A failed automatic check is
+deliberately silent - a till between access points fails one every four hours -
+so this page is where "is this thing even looking?" gets an answer, which is
+why it says when it last looked.
+
 Each group is a card with a badged header, so the page reads as a short list of
 decisions rather than one long list of controls. The About card is the honest home for
 the build number, the settings file and the folders the app writes to - the
@@ -22,6 +28,7 @@ things a user is asked for when they report a problem.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
@@ -45,9 +52,11 @@ from bytesraw_erp.data.models import (
     PrintMode,
     PrintSettings,
     RenderMode,
+    UpdateChannel,
 )
 from bytesraw_erp.services.graphics import active_render_mode
 from bytesraw_erp.services.print_service import available_printers, default_printer_name
+from bytesraw_erp.services.update_service import Update, is_installed_build
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.theme import Palette, Theme
@@ -66,8 +75,25 @@ _WIDE_CONTROL = 420
 _SYSTEM_DEFAULT = ""
 
 
+def _describe_age(when: datetime) -> str:
+    """When something happened, in the coarsest unit that is still true.
+
+    Coarse on purpose: the exact second a background check ran is never what the
+    reader wants to know, and a bare timestamp would leave them to do the
+    subtraction themselves.
+    """
+    seconds = max(0, int((datetime.now(UTC) - when).total_seconds()))
+    if seconds < 90:
+        return "just now"
+    for unit, length, ceiling in (("minute", 60, 60), ("hour", 3600, 24), ("day", 86400, 1000)):
+        count = seconds // length
+        if count < ceiling:
+            return f"{count} {unit}s ago" if count != 1 else f"1 {unit} ago"
+    return "a long time ago"
+
+
 class SettingsPage(QWidget):
-    """Appearance, display and printing preferences, stored locally."""
+    """Appearance, display, printing and update preferences, stored locally."""
 
     def __init__(self, context: AppContext, router: Router, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -78,6 +104,9 @@ class SettingsPage(QWidget):
         #: Section badges are rendered bitmaps, and this is the one page where
         #: the theme changes under the widget that is showing it.
         self._sections: list[SectionHeader] = []
+        #: The release currently on offer, so the buttons and the status line
+        #: agree with each other and survive leaving and re-entering the page.
+        self._pending: Update | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -91,7 +120,11 @@ class SettingsPage(QWidget):
         header = QHBoxLayout()
         header.setSpacing(16)
         header.addWidget(
-            BrandHeader("Settings", "Appearance, display and printing, for this computer."), 1
+            BrandHeader(
+                "Settings",
+                "Appearance, display, printing and updates, for this computer.",
+            ),
+            1,
         )
         self._close = QPushButton("Done")
         self._close.setProperty("variant", "primary")
@@ -105,6 +138,7 @@ class SettingsPage(QWidget):
         layout.addWidget(self._build_appearance_card())
         layout.addWidget(self._build_display_card())
         layout.addWidget(self._build_printing_card())
+        layout.addWidget(self._build_updates_card())
         layout.addWidget(self._build_about_card())
         layout.addStretch(1)
 
@@ -116,6 +150,19 @@ class SettingsPage(QWidget):
 
         context.theme.theme_changed.connect(self._apply_theme)
         self._apply_theme(context.theme.palette)
+
+        # This page is rebuilt on every visit, so these connections die with
+        # it: Qt drops a connection when the receiving QObject is destroyed,
+        # and the router deletes the old page rather than parking it.
+        updates = context.updates
+        updates.checking.connect(self._on_update_checking)
+        updates.update_available.connect(self._on_update_found)
+        updates.up_to_date.connect(self._on_update_none)
+        updates.check_failed.connect(self._on_update_check_failed)
+        updates.download_started.connect(self._on_update_download_started)
+        updates.download_progress.connect(self._on_update_download_progress)
+        updates.download_finished.connect(self._on_update_download_finished)
+        updates.download_failed.connect(self._on_update_download_failed)
 
     # -- construction ------------------------------------------------------
 
@@ -215,6 +262,65 @@ class SettingsPage(QWidget):
         card.body.addWidget(self._keep_copy)
         return card
 
+    def _build_updates_card(self) -> Card:
+        card = Card()
+        card.body.addWidget(
+            self._section(
+                "download",
+                "Updates",
+                f"How this computer gets a new version of {APP_NAME}.",
+            )
+        )
+
+        self._auto_update = QCheckBox("Check for updates automatically")
+        self._auto_update.setToolTip(
+            "Checks on launch and every few hours. Nothing is ever downloaded "
+            "or installed without you choosing to."
+        )
+        self._auto_update.toggled.connect(self._on_updates_changed)
+        card.body.addWidget(self._auto_update)
+
+        self._channel = QComboBox()
+        self._channel.setMaximumWidth(_WIDE_CONTROL)
+        for channel in (UpdateChannel.STABLE, UpdateChannel.BETA):
+            self._channel.addItem(channel.label, channel.value)
+        self._channel.currentIndexChanged.connect(self._on_updates_changed)
+        card.body.addWidget(
+            Field(
+                "Channel",
+                self._channel,
+                "Beta releases are published for testing and have not been "
+                "through the same checks. Leave this on Stable for a till.",
+            )
+        )
+
+        self._update_status = hint("")
+        card.body.addWidget(self._update_status)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self._check_now = QPushButton("Check now")
+        self._check_now.clicked.connect(self._on_check_now)
+        actions.addWidget(self._check_now)
+
+        # Built hidden rather than built on demand: the card's height then
+        # never jumps as a check completes, and there is exactly one widget to
+        # reason about whether an update is pending or not.
+        self._install_update = QPushButton("Download and install")
+        self._install_update.setProperty("variant", "primary")
+        self._install_update.clicked.connect(self._on_install_update)
+        self._install_update.hide()
+        actions.addWidget(self._install_update)
+
+        self._release_notes = QPushButton("Release notes")
+        self._release_notes.clicked.connect(self._on_release_notes)
+        self._release_notes.hide()
+        actions.addWidget(self._release_notes)
+
+        actions.addStretch(1)
+        card.body.addLayout(actions)
+        return card
+
     def _build_about_card(self) -> Card:
         card = Card()
         card.body.addWidget(
@@ -293,6 +399,7 @@ class SettingsPage(QWidget):
             self._auto_print.setChecked(settings.auto_print_reports)
             self._keep_copy.setChecked(settings.keep_report_copy)
             self._keep_copy.setEnabled(settings.auto_print_reports)
+            self._load_updates()
             self._storage_hint.setText(str(self._context.settings.path))
         finally:
             self._loading = False
@@ -394,6 +501,145 @@ class SettingsPage(QWidget):
             self._banner.show_error(str(exc))
             return
         self._banner.show_info("Print settings saved.")
+
+    # -- updates -----------------------------------------------------------
+
+    def _load_updates(self) -> None:
+        settings = self._context.settings.updates
+        self._auto_update.setChecked(settings.check_automatically)
+        self._channel.setCurrentIndex(max(self._channel.findData(settings.channel.value), 0))
+        # An update found while the user was elsewhere is still on offer: the
+        # service remembers it, so re-entering this page needs no fresh check.
+        self._pending = self._context.updates.available
+        self._refresh_update_status()
+
+    def _refresh_update_status(self) -> None:
+        """Say what is known, and only what is known.
+
+        The states that matter are "nothing found", "something found", "a check
+        is running" and "nothing has ever looked" - and it is the last one this
+        card exists for, because an automatic check that fails says nothing.
+        """
+        updates = self._context.updates
+        self._check_now.setEnabled(not updates.busy and not updates.installing)
+        self._install_update.setVisible(self._pending is not None)
+        self._install_update.setEnabled(not updates.busy and not updates.installing)
+        self._release_notes.setVisible(bool(self._pending and self._pending.notes_url))
+
+        if updates.installing:
+            self._update_status.setText(
+                f"Installing the update. {APP_NAME} will close and reopen."
+            )
+            return
+        if updates.downloading:
+            return  # the progress handler owns the text while a download runs
+        if updates.checking_now:
+            self._update_status.setText("Checking for updates...")
+            return
+        if self._pending is not None:
+            required = " This update is required." if self._is_required() else ""
+            self._update_status.setText(
+                f"{APP_NAME} {self._pending.version} is available "
+                f"({self._pending.artifact.size_mb}).{required}"
+            )
+            return
+        self._update_status.setText(self._idle_status())
+
+    def _is_required(self) -> bool:
+        return self._pending is not None and self._pending.is_required_for(APP_VERSION)
+
+    def _idle_status(self) -> str:
+        """What to say when there is nothing on offer.
+
+        A source checkout is called out explicitly. Its automatic checks are
+        skipped - there is no installed copy to replace - and a card claiming to
+        check automatically while nothing ever checked is a lie that costs a
+        developer an afternoon.
+        """
+        checked = self._context.settings.updates.last_check_at
+        when = f"Last checked {_describe_age(checked)}." if checked else "Not checked yet."
+        if not is_installed_build():
+            return (
+                f"{when} This is a development build, so automatic checks are "
+                "skipped - use Check now."
+            )
+        if not self._auto_update.isChecked():
+            return f"{when} Automatic checks are off."
+        return f"{when} {APP_NAME} {APP_VERSION} is up to date."
+
+    def _on_updates_changed(self, *_args: object) -> None:
+        if self._loading:
+            return
+        settings = self._context.settings.updates.evolve(
+            check_automatically=self._auto_update.isChecked(),
+            channel=UpdateChannel(str(self._channel.currentData())),
+        )
+        try:
+            self._context.settings.set_updates(settings)
+        except BytesrawError as exc:
+            self._banner.show_error(str(exc))
+            return
+        self._context.updates.apply_settings()
+        # A channel change makes whatever was on offer the wrong answer - it came
+        # out of the other manifest. Dropping it is what stops a till moved back
+        # to stable still being offered the beta it saw a moment ago.
+        self._pending = None
+        self._refresh_update_status()
+        self._banner.show_info("Update settings saved.")
+
+    def _on_check_now(self) -> None:
+        self._banner.clear_message()
+        # ``manual`` is what makes this ignore a staged rollout: a user who
+        # asked the question is owed the true answer, not the one their bucket
+        # allows.
+        self._context.updates.check(manual=True)
+
+    def _on_install_update(self) -> None:
+        self._banner.clear_message()
+        self._context.updates.download_and_install(self._pending)
+
+    def _on_release_notes(self) -> None:
+        if self._pending is None or not self._pending.notes_url:
+            return
+        if not QDesktopServices.openUrl(QUrl(self._pending.notes_url)):
+            self._banner.show_error("Could not open the release notes in your browser.")
+
+    def _on_update_checking(self) -> None:
+        self._refresh_update_status()
+
+    def _on_update_found(self, update: object) -> None:
+        self._pending = update if isinstance(update, Update) else None
+        self._refresh_update_status()
+
+    def _on_update_none(self) -> None:
+        self._pending = None
+        self._refresh_update_status()
+
+    def _on_update_check_failed(self, message: str) -> None:
+        self._refresh_update_status()
+        # Shown here and nowhere else. The automatic check stays silent on
+        # purpose; this page is the one place a check was *asked for*, so this
+        # is the one place a failure is news rather than noise.
+        self._banner.show_error(message)
+
+    def _on_update_download_started(self, _update: object) -> None:
+        self._refresh_update_status()
+        self._update_status.setText("Downloading the update...")
+
+    def _on_update_download_progress(self, received: int, total: int) -> None:
+        if total <= 0:
+            return
+        self._update_status.setText(
+            f"Downloading the update... {received * 100 // total}% "
+            f"({received / (1024 * 1024):.0f} MB of {total / (1024 * 1024):.0f} MB)"
+        )
+
+    def _on_update_download_finished(self, _path: object) -> None:
+        self._refresh_update_status()
+
+    def _on_update_download_failed(self, message: str) -> None:
+        self._refresh_update_status()
+        self._banner.show_error(message)
 
     # -- navigation --------------------------------------------------------
 

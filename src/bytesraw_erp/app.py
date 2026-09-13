@@ -176,6 +176,10 @@ def run(argv: list[str] | None = None) -> int:
         # ``show()`` first would flash a framed window before it switched.
         window.showFullScreen()
     window.start()
+    # After the window, deliberately: the first check is delayed anyway, and
+    # arming it earlier would only put an update request in front of the
+    # sign-in that the user is actually waiting for.
+    context.updates.start()
 
     app.aboutToQuit.connect(context.shutdown)
     return app.exec()

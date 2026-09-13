@@ -160,3 +160,109 @@ jobs:
           gh release upload '${{ github.event.release.tag_name }}' `
             (Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip' } | ForEach-Object { $_.FullName }) `
             dist/SHA256SUMS.txt --clobber
+
+      # ---------------------------------------------------------------------
+      # Announce the release on the update host.
+      #
+      # This runs in the same job as the build on purpose. A release that ships
+      # without updating the manifest is a release nobody is ever offered, and a
+      # manifest written by hand afterwards is a checksum typed twice - so the
+      # numbers published here are the ones just computed, from the very files
+      # that were just uploaded.
+      #
+      # The manifest lives on the `updates` orphan branch, which shares no
+      # history with main, so this never appears in the application's diff.
+      # Checking that branch out into a subdirectory rather than rewriting it
+      # wholesale is what preserves the CNAME file that binding the custom
+      # domain in Pages settings committed there.
+      # ---------------------------------------------------------------------
+      - name: Check out the update host
+        if: github.event_name == 'release'
+        uses: actions/checkout@v7
+        with:
+          ref: updates
+          path: update-host
+
+      - name: Publish the channel manifest
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Exit codes are checked explicitly below. Left on, a native command's
+          # nonzero exit becomes a terminating error, and `git diff --quiet`
+          # answers "there are changes" with exit 1 - which is the success path
+          # here, not a failure.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $version = '${{ github.event.release.tag_name }}' -replace '^v', ''
+          # A pre-release announces itself on the beta channel and never touches
+          # stable. One file per channel is the whole reason a beta that goes
+          # wrong cannot reach a till following stable.
+          $channel = if ('${{ github.event.release.prerelease }}' -eq 'true') { 'beta' } else { 'stable' }
+
+          $installer = Get-ChildItem dist -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'No installer in dist/ to describe.' }
+          $sha = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
+
+          $path = "update-host/erp/$channel.json"
+          $previous = $null
+          if (Test-Path $path) { $previous = Get-Content $path -Raw | ConvertFrom-Json }
+
+          # Two fields are carried over rather than regenerated, because they are
+          # decisions about the fleet and not facts about this build:
+          #   minimum_supported - the floor below which an update stops being
+          #     optional. Bumping it silently on every release would make every
+          #     release mandatory.
+          #   next_manifest_url - the only migration path an already-installed
+          #     binary has. Losing it here would strand those installations.
+          $minimum = '0.1.0'
+          if ($previous -and $previous.minimum_supported) { $minimum = $previous.minimum_supported }
+          $next = $null
+          if ($previous -and $previous.next_manifest_url) { $next = $previous.next_manifest_url }
+
+          # rollout and mandatory reset with every release: staging a rollout or
+          # declaring an update compulsory is a deliberate act, done by editing
+          # the manifest on this branch after the release is out. A release that
+          # inherited last time's 25% would stall for reasons nobody remembers.
+          $manifest = [ordered]@{
+            schema            = 1
+            product           = 'bytesraw-erp'
+            channel           = $channel
+            version           = $version
+            released          = (Get-Date -Format 'yyyy-MM-dd')
+            minimum_supported = $minimum
+            mandatory         = $false
+            rollout           = 100
+            # The client enforces Authenticode only when this says there is a
+            # signature to check, so it must track whether signing actually ran
+            # rather than what we hope is true.
+            signed            = ('${{ steps.signing.outputs.enabled }}' -eq 'true')
+            notes_url         = '${{ github.event.release.html_url }}'
+            next_manifest_url = $next
+            artifact          = [ordered]@{
+              url         = "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/$($installer.Name)"
+              filename    = $installer.Name
+              sha256      = $sha
+              size        = $installer.Length
+              installer   = 'inno-setup'
+              silent_args = @('/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS')
+            }
+          }
+
+          # LF and no BOM: the file is served as application/json to every till
+          # in the field, and a BOM is a parse error in some JSON readers.
+          $json = ($manifest | ConvertTo-Json -Depth 5).Replace("`r`n", "`n") + "`n"
+          New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
+          [System.IO.File]::WriteAllText("$PWD/$path", $json, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host $json
+
+          git -C update-host config user.name 'github-actions[bot]'
+          git -C update-host config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C update-host add "erp/$channel.json"
+          if (-not (git -C update-host status --porcelain "erp/$channel.json")) {
+            Write-Host "The $channel manifest already describes $version; nothing to push."
+            exit 0
+          }
+          git -C update-host commit -m "Announce $version on the $channel channel"
+          if ($LASTEXITCODE -ne 0) { throw "Could not commit the $channel manifest." }
+          git -C update-host push
+          if ($LASTEXITCODE -ne 0) { throw "Could not push the $channel manifest." }

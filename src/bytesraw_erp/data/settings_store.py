@@ -11,16 +11,23 @@ leave a truncated file behind.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from bytesraw_erp.constants import SETTINGS_VERSION
 from bytesraw_erp.core.errors import ConfigError
 from bytesraw_erp.core.paths import settings_file
-from bytesraw_erp.data.models import DisplaySettings, PrintSettings
+from bytesraw_erp.data.models import (
+    DisplaySettings,
+    PrintSettings,
+    UpdateSettings,
+    new_install_id,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -37,6 +44,7 @@ class SettingsStore:
         self._path = path or settings_file()
         self._printing = PrintSettings()
         self._display = DisplaySettings()
+        self._updates = UpdateSettings()
         self._loaded = False
 
     # -- lifecycle ---------------------------------------------------------
@@ -44,6 +52,7 @@ class SettingsStore:
     def load(self) -> None:
         self._printing = PrintSettings()
         self._display = DisplaySettings()
+        self._updates = UpdateSettings()
         self._loaded = True
 
         if not self._path.exists():
@@ -66,12 +75,14 @@ class SettingsStore:
 
         self._printing = PrintSettings.from_dict(raw.get("printing") or {})
         self._display = DisplaySettings.from_dict(raw.get("display") or {})
+        self._updates = UpdateSettings.from_dict(raw.get("updates") or {})
 
     def save(self) -> None:
         payload = {
             "version": SETTINGS_VERSION,
             "printing": self._printing.to_dict(),
             "display": self._display.to_dict(),
+            "updates": self._updates.to_dict(),
         }
         tmp = self._path.with_suffix(".json.tmp")
         try:
@@ -120,6 +131,56 @@ class SettingsStore:
         self._display = settings
         self.save()
         _log.info("Display settings: render_mode=%s", settings.render_mode.value)
+
+    # -- updates -----------------------------------------------------------
+
+    @property
+    def updates(self) -> UpdateSettings:
+        self._require_loaded()
+        return self._updates
+
+    def set_updates(self, settings: UpdateSettings) -> None:
+        self._require_loaded()
+        if settings == self._updates:
+            return
+        self._updates = settings
+        self.save()
+        _log.info(
+            "Update settings: automatic=%s channel=%s",
+            settings.check_automatically,
+            settings.channel.value,
+        )
+
+    def ensure_install_id(self) -> str:
+        """This installation's rollout id, minting one on first use.
+
+        Written here rather than in :meth:`load` because loading a settings
+        file should not have the side effect of writing one, and the id is
+        wanted only by the update service. A failure to persist it is not
+        fatal: the rollout bucket is then re-rolled on the next launch, which
+        is a worse staged rollout but not a broken app, and every other setting
+        on the page would be lost if this raised.
+        """
+        self._require_loaded()
+        if not self._updates.install_id:
+            self._updates = self._updates.evolve(install_id=new_install_id())
+            with contextlib.suppress(ConfigError):
+                self.save()
+        return self._updates.install_id
+
+    def record_update_check(self) -> None:
+        """Stamp "checked just now", so the settings page can say so.
+
+        Separate from :meth:`set_updates` because this fires on a timer every
+        few hours and must not log a line each time as though the user had
+        changed something.
+        """
+        self._require_loaded()
+        self._updates = self._updates.evolve(
+            last_check=datetime.now(UTC).isoformat(timespec="seconds")
+        )
+        with contextlib.suppress(ConfigError):
+            self.save()
 
     @property
     def path(self) -> Path:

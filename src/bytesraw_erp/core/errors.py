@@ -74,3 +74,15 @@ class CredentialError(BytesrawError):
 
 class ConfigError(BytesrawError):
     """``accounts.json`` is unreadable, corrupt, or of an unknown version."""
+
+
+class UpdateError(BytesrawError):
+    """An update could not be checked for, downloaded, or verified.
+
+    Deliberately one class rather than a family: to the user every failure here
+    has the same shape - "the update did not happen, and nothing changed" - and
+    the app carries on running the build it already has. The distinctions that
+    matter (a manifest that cannot be read, a checksum that does not match, a
+    signature that does not verify) are in the message and in the log, not in
+    the type, because no caller branches on them.
+    """

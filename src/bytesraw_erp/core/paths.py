@@ -72,3 +72,14 @@ def profile_storage_dir(account_id: str) -> Path:
 
 def profile_cache_dir(account_id: str) -> Path:
     return _ensure(cache_dir() / "profiles" / account_id)
+
+
+def updates_dir() -> Path:
+    """Where a downloaded installer waits until it is run.
+
+    Under the cache directory, and therefore under ``%LOCALAPPDATA%``: a 140 MB
+    installer has no business in a roaming profile, and the file is disposable
+    the moment it has been run. ``%LOCALAPPDATA%`` is also writable by the user
+    the app runs as, which the install directory is not.
+    """
+    return _ensure(cache_dir() / "updates")
