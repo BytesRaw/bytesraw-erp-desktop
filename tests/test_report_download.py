@@ -27,6 +27,7 @@ from bytesraw_erp.ui.widgets.web_view import OdooWebView
 
 _PDF_PATH = "/report/download"
 _ATTACHMENT_PATH = "/web/content/7"
+_INVOICE_PATH = "/account/download_invoice_documents/1/pdf"
 
 
 def _one_page_pdf() -> bytes:
@@ -51,8 +52,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?")[0]
-        if path in (_PDF_PATH, _ATTACHMENT_PATH):
-            name = "invoice.pdf" if path == _PDF_PATH else "attachment.pdf"
+        if path in (_PDF_PATH, _ATTACHMENT_PATH, _INVOICE_PATH):
+            name = "attachment.pdf" if path == _ATTACHMENT_PATH else "invoice.pdf"
             self.send_response(200)
             self.send_header("Content-Type", "application/pdf")
             self.send_header("Content-Length", str(len(self.pdf)))
@@ -96,9 +97,20 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     return {"reports": reports, "downloads": downloads}
 
 
+#: Profiles and views built by the tests below, kept referenced for the life of
+#: the module. ``qtbot`` destroys a widget at teardown, *after* the test body
+#: has dropped the ``ProfileManager`` it borrowed a profile from - and a profile
+#: freed while a page still uses it takes the process with it, which is the same
+#: ordering rule ``MainWindow.closeEvent`` exists to honour. Measured as an
+#: access violation in ``_close_widgets`` on any test that opens a second
+#: ``WebContents``, i.e. any test that folds a ``target=_blank`` into the view.
+_KEEP_ALIVE: list[object] = []
+
+
 def _view(base_url: str, profiles: ProfileManager, qtbot) -> OdooWebView:
     account = Account(url=base_url, database="demo", login="demo")
     view = OdooWebView(account, profiles.profile_for(account))
+    _KEEP_ALIVE.extend((profiles, view))
     qtbot.addWidget(view)
     view.resize(600, 400)
     view.show()
@@ -188,6 +200,55 @@ def test_the_same_report_can_be_printed_twice_in_one_session(
     assert first_report != second_report, "each print needs its own file"
     assert first_report.exists() and second_report.exists()
     assert second_report.read_bytes()[:4] == b"%PDF"
+
+
+def test_pos_invoice_download_does_not_blank_the_view(
+    server: str, sandbox: dict[str, Path], qtbot
+) -> None:
+    """POS's invoice button opens ``/account/download_...`` via window.open.
+
+    That is an ``ir.actions.act_url`` with ``target: "download"``, which the
+    web client's action service runs as ``browser.open(url, "_blank")`` - a
+    real ``target=_blank`` navigation, not the XHR-blob path ``/report/download``
+    uses. ``OdooWebPage.createWindow`` folds ``_blank`` into this same visible
+    page, and the download always carries ``Content-Disposition: attachment``,
+    so letting it navigate would tear down whatever was on screen (the POS SPA)
+    without ever committing a replacement document - the "blank white screen"
+    bug. The page must stay exactly where it was.
+    """
+    profiles = ProfileManager()
+    view = _view(server, profiles, qtbot)
+    with qtbot.waitSignal(view.loadFinished, timeout=20000):
+        view.open_path("/")
+    before = view.url().toString()
+
+    with qtbot.waitSignal(profiles.report_downloaded, timeout=20000) as blocker:
+        view.page().runJavaScript(f"window.open('{_INVOICE_PATH}', '_blank')")
+
+    landed = Path(blocker.args[0])
+    assert landed.parent == sandbox["reports"]
+    assert landed.read_bytes()[:4] == b"%PDF"
+    assert view.url().toString() == before, "the visible page must not navigate"
+
+
+def test_an_ordinary_new_window_still_loads_in_place(
+    server: str, sandbox: dict[str, Path], qtbot
+) -> None:
+    """The other half: a ``_blank`` that is a real page must still fold in.
+
+    Odoo opens attachments and the inline report viewer this way, and the
+    shell has no second window to put them in - so anything that is not an
+    attachment-only download keeps landing in this view.
+    """
+    profiles = ProfileManager()
+    view = _view(server, profiles, qtbot)
+    with qtbot.waitSignal(view.loadFinished, timeout=20000):
+        view.open_path("/")
+
+    with qtbot.waitSignal(view.loadFinished, timeout=20000):
+        view.page().runJavaScript("window.open('/odoo/sales', '_blank')")
+
+    assert view.url().path() == "/odoo/sales"
 
 
 def _pdf_printer(tmp_path: Path) -> QPrinter:

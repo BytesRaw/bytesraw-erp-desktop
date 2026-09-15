@@ -318,23 +318,20 @@ class PrintService(QObject):
 
     # -- settings-driven entry points --------------------------------------
 
-    def print_view_with(
-        self,
-        view: QWidget,
-        settings: PrintSettings,
-        parent: QWidget | None = None,
-    ) -> bool:
-        """Print the page using the app's configured mode and printer."""
-        return self.print_view(view, settings.mode, parent, settings.printer_name)
-
     def print_pdf_with(
         self,
         path: Path,
         settings: PrintSettings,
         parent: QWidget | None = None,
     ) -> bool:
-        """Print a report PDF using the app's configured mode and printer."""
-        return self.print_pdf(path, settings.mode, parent, settings.printer_name)
+        """Print a report PDF using the app's configured mode and A4 printer.
+
+        A QWeb report is an A4 document wherever it was rendered from, so this
+        route never consults the POS printer - not even for an invoice printed
+        from inside a POS session, which is the case that made the split
+        necessary.
+        """
+        return self.print_pdf(path, settings.mode, parent, settings.report_printer_name)
 
     # -- helpers -----------------------------------------------------------
 

@@ -217,8 +217,8 @@ class SettingsPage(QWidget):
             self._section(
                 "printer-cog",
                 "Printing",
-                "Applies to every print from Odoo, including a report's own "
-                "Print button and a receipt calling window.print().",
+                "Reports print on A4. The Point of Sale screen prints on the "
+                "receipt printer, and nothing else uses it.",
             )
         )
 
@@ -237,21 +237,46 @@ class SettingsPage(QWidget):
             )
         )
 
-        self._printer = QComboBox()
-        self._printer.setMaximumWidth(_WIDE_CONTROL)
-        self._printer.currentIndexChanged.connect(self._on_printing_changed)
-        card.body.addWidget(Field("Printer", self._printer))
+        self._report_printer = QComboBox()
+        self._report_printer.setMaximumWidth(_WIDE_CONTROL)
+        self._report_printer.currentIndexChanged.connect(self._on_printing_changed)
+        card.body.addWidget(
+            Field(
+                "Report printer (A4)",
+                self._report_printer,
+                "Every PDF report prints here, the Point of Sale included.",
+            )
+        )
+
+        self._pos_printer = QComboBox()
+        self._pos_printer.setMaximumWidth(_WIDE_CONTROL)
+        self._pos_printer.currentIndexChanged.connect(self._on_printing_changed)
+        card.body.addWidget(
+            Field(
+                "Receipt printer (Point of Sale)",
+                self._pos_printer,
+                "Used for the Point of Sale screen and nothing else.",
+            )
+        )
+
+        # Directly under the two pickers, because it is about the pair of them.
+        self._printer_hint = hint("")
+        card.body.addWidget(self._printer_hint)
 
         self._auto_print = QCheckBox("Print Odoo PDF reports as soon as they arrive")
         self._auto_print.setToolTip(
             "Odoo downloads a rendered PDF when you print a report. With this "
-            "on, Bytesraw ERP sends it straight to the printer instead of only "
-            "saving it."
+            "on, Bytesraw ERP sends it straight to the report printer instead "
+            "of only saving it."
         )
         self._auto_print.toggled.connect(self._on_printing_changed)
         card.body.addWidget(self._auto_print)
 
-        self._keep_copy = QCheckBox("Also keep a copy in the Downloads folder")
+        self._keep_copy = QCheckBox("Save every report in the Downloads folder")
+        self._keep_copy.setToolTip(
+            "Keeps the PDF whether or not it is printed, so a report is still "
+            "somewhere you can find it."
+        )
         self._keep_copy.toggled.connect(self._on_printing_changed)
         card.body.addWidget(self._keep_copy)
         return card
@@ -381,33 +406,61 @@ class SettingsPage(QWidget):
             self._populate_printers()
             settings = self._context.settings.printing
             self._mode.setCurrentIndex(max(self._mode.findData(settings.mode.value), 0))
-            printer_index = self._printer.findData(settings.printer_name)
-            if printer_index < 0:
-                # The configured printer is gone. Show the system default and
-                # say so, rather than silently pretending it is still there.
-                printer_index = 0
-                self._banner.show_info(
-                    f"The printer '{settings.printer_name}' is no longer "
-                    "available, so the Windows default will be used."
-                )
-            self._printer.setCurrentIndex(printer_index)
+            self._select_printer(self._report_printer, settings.report_printer_name, "report")
+            self._select_printer(self._pos_printer, settings.pos_printer_name, "receipt")
             self._auto_print.setChecked(settings.auto_print_reports)
+            # Not gated on auto-print: with printing off this is the only thing
+            # that keeps a report anywhere the user can find it.
             self._keep_copy.setChecked(settings.keep_report_copy)
-            self._keep_copy.setEnabled(settings.auto_print_reports)
+            self._refresh_printer_hint(settings)
             self._load_updates()
             self._storage_hint.setText(str(self._context.settings.path))
         finally:
             self._loading = False
 
     def _populate_printers(self) -> None:
-        self._printer.clear()
         default = default_printer_name()
-        self._printer.addItem(
-            f"Windows default ({default})" if default else "Windows default (none set)",
-            _SYSTEM_DEFAULT,
-        )
-        for name in available_printers():
-            self._printer.addItem(name, name)
+        label = f"Windows default ({default})" if default else "Windows default (none set)"
+        names = available_printers()
+        for combo in (self._report_printer, self._pos_printer):
+            combo.clear()
+            combo.addItem(label, _SYSTEM_DEFAULT)
+            for name in names:
+                combo.addItem(name, name)
+
+    def _refresh_printer_hint(self, settings: PrintSettings) -> None:
+        """Warn when both kinds of paper would come out of one device.
+
+        "Windows default" is the right default for reports and a trap on a
+        till, where the default printer is usually the receipt printer - which
+        is the very thing that sent A4 invoices to an 80mm roll. The check is
+        on the resolved device rather than on the printer's name: guessing
+        "thermal" from a model name would be wrong on the machines that matter.
+        """
+        default = default_printer_name()
+        report = settings.report_printer_name or default
+        pos = settings.pos_printer_name or default
+        if report and report == pos:
+            self._printer_hint.setText(
+                f"Both are currently '{report}'. If that is a receipt printer, "
+                "A4 reports will not come out readable - choose a different "
+                "printer for reports, or turn off printing them below."
+            )
+        else:
+            self._printer_hint.setText("")
+
+    def _select_printer(self, combo: QComboBox, name: str, what: str) -> None:
+        """Show the stored printer, or say plainly that it has gone."""
+        index = combo.findData(name)
+        if index < 0:
+            # The configured printer is gone. Show the system default and say
+            # so, rather than silently pretending it is still there.
+            index = 0
+            self._banner.show_info(
+                f"The {what} printer '{name}' is no longer available, so the "
+                "Windows default will be used."
+            )
+        combo.setCurrentIndex(index)
 
     def _refresh_render_hint(self) -> None:
         """Say whether the stored mode is the one actually in force.
@@ -485,16 +538,17 @@ class SettingsPage(QWidget):
             return
         settings = PrintSettings(
             mode=PrintMode(str(self._mode.currentData())),
-            printer_name=str(self._printer.currentData() or _SYSTEM_DEFAULT),
+            report_printer_name=str(self._report_printer.currentData() or _SYSTEM_DEFAULT),
+            pos_printer_name=str(self._pos_printer.currentData() or _SYSTEM_DEFAULT),
             auto_print_reports=self._auto_print.isChecked(),
             keep_report_copy=self._keep_copy.isChecked(),
         )
-        self._keep_copy.setEnabled(settings.auto_print_reports)
         try:
             self._context.settings.set_printing(settings)
         except BytesrawError as exc:
             self._banner.show_error(str(exc))
             return
+        self._refresh_printer_hint(settings)
         self._banner.show_info("Print settings saved.")
 
     # -- updates -----------------------------------------------------------

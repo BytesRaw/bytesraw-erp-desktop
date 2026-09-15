@@ -51,6 +51,7 @@ from bytesraw_erp.constants import (
     APP_VERSION,
     ODOO_HOME_PATH,
     ODOO_LOGIN_PATH,
+    POS_PATH_PREFIX,
     ROUTE_ACCOUNT_NEW,
     ROUTE_ACCOUNTS,
     ROUTE_SETTINGS,
@@ -581,13 +582,23 @@ class OdooPage(QWidget):
 
     # -- printing ----------------------------------------------------------
 
+    def _is_pos(self) -> bool:
+        """Is the view showing Odoo's Point of Sale client?
+
+        The page on screen is what decides which printer a page print belongs
+        on, because that is what is about to come out of it: under ``/pos/`` it
+        is a receipt for the thermal roll, anywhere else it is an A4 page.
+        """
+        return self._web is not None and self._web.current_path().startswith(POS_PATH_PREFIX)
+
     def _print(self, mode: PrintMode) -> None:
-        """Print the page with an explicit mode, on the configured printer."""
+        """Print the page with an explicit mode, on the printer for this screen."""
         if self._web is None or self._stack.currentWidget() is not self._web:
             return
+        settings = self._context.settings.printing
         try:
             self._context.printing.print_view(
-                self._web, mode, self, self._context.settings.printing.printer_name
+                self._web, mode, self, settings.printer_for(pos=self._is_pos())
             )
         except PrintError as exc:
             QMessageBox.warning(self, "Print", str(exc))
@@ -605,14 +616,23 @@ class OdooPage(QWidget):
 
         This is what makes Odoo's own Print button reach paper: the web client
         answers a print action with a PDF download, which a plain browser would
-        simply drop in the Downloads folder.
+        simply drop in the Downloads folder. It always prints on the A4
+        printer - a report is an A4 document even when POS produced it.
         """
         settings = self._context.settings.printing
-        if settings.keep_report_copy:
-            self._keep_copy(path)
+        copied = self._keep_copy(path) if settings.keep_report_copy else None
 
         if not settings.auto_print_reports:
-            _log.info("Automatic report printing is off; kept %s", path)
+            # Say where it went. Without this the report is invisible: it sits
+            # in the scratch directory, is pruned within a day, and the user
+            # who pressed Print in Odoo sees nothing happen anywhere.
+            landed = copied or path
+            _log.info("Automatic report printing is off; kept %s", landed)
+            self._toasts.show_message(
+                f"Saved {landed.name}",
+                action_text="Show in folder",
+                on_action=lambda: self._reveal(landed),
+            )
             return
 
         try:
@@ -620,8 +640,8 @@ class OdooPage(QWidget):
         except PrintError as exc:
             QMessageBox.warning(self, "Print", str(exc))
 
-    def _keep_copy(self, path: Path) -> None:
-        """Copy a printed report into Downloads, without clobbering a namesake."""
+    def _keep_copy(self, path: Path) -> Path | None:
+        """Copy a report into Downloads, without clobbering a namesake."""
         target = downloads_dir() / path.name
         counter = 1
         while target.exists():
@@ -629,9 +649,11 @@ class OdooPage(QWidget):
             counter += 1
         try:
             shutil.copy2(path, target)
-            _log.info("Kept a copy of %s at %s", path.name, target)
         except OSError as exc:
             _log.warning("Could not keep a copy of %s: %s", path.name, exc)
+            return None
+        _log.info("Kept a copy of %s at %s", path.name, target)
+        return target
 
     def _on_file_downloaded(self, path: Path) -> None:
         """Tell the user where a download landed, and offer to reveal it.

@@ -20,6 +20,7 @@ from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebEngineCore import (
     QWebEngineCertificateError,
+    QWebEngineNewWindowRequest,
     QWebEnginePage,
     QWebEngineProfile,
     QWebEngineSettings,
@@ -28,6 +29,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget
 
 from bytesraw_erp.data.models import Account
+from bytesraw_erp.services.profile_manager import is_attachment_download_url
 
 _log = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class OdooWebPage(QWebEnginePage):
         super().__init__(profile, parent)
         self._account = account
         self._host = QUrl(account.url).host()
+        self.newWindowRequested.connect(self._on_new_window_requested)
 
     def set_account(self, account: Account) -> None:
         self._account = account
@@ -72,13 +75,37 @@ class OdooWebPage(QWebEnginePage):
             return False
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
-    def createWindow(self, _window_type: QWebEnginePage.WebWindowType) -> QWebEnginePage:
-        """Fold ``target=_blank`` navigations back into this view.
+    def _on_new_window_requested(self, request: QWebEngineNewWindowRequest) -> None:
+        """Decide where a ``target=_blank`` navigation goes.
 
-        Odoo opens reports and attachments this way. Returning ``self`` makes
-        them load in place instead of spawning an unmanaged popup window.
+        Odoo opens reports and attachments this way, and folding them into this
+        page is what stops an unmanaged popup window appearing - but a URL Odoo
+        answers with ``Content-Disposition: attachment`` must never be folded
+        in. Such a navigation can only turn into a download; it never commits a
+        document, so it tears down whatever was on screen and leaves nothing in
+        its place. POS's invoice button hits exactly that: an
+        ``ir.actions.act_url`` with ``target: "download"``, which the web
+        client's action service runs as ``browser.open(url, "_blank")``, so
+        validating an order with an invoice blanked the whole POS session.
+
+        ``download()`` fetches the same file through the same profile - and so
+        through the same report routing and auto-printing - without navigating
+        anywhere. Leaving the request unanswered is what keeps the page put:
+        a request nobody calls ``openIn()`` on opens no window.
+
+        This is the hook rather than :meth:`acceptNavigationRequest` because
+        that one is never called for a navigation Chromium starts on behalf of
+        ``window.open``; the decision is already made by the time a page is
+        asked for. It replaces ``createWindow()`` for the same reason - that
+        one is handed a window type and no URL, so it cannot tell the two
+        cases apart.
         """
-        return self
+        url = request.requestedUrl()
+        if is_attachment_download_url(url.toString()):
+            _log.info("Downloading %s instead of navigating to it", url.path())
+            self.download(url)
+            return
+        request.openIn(self)
 
     def javaScriptConsoleMessage(
         self,

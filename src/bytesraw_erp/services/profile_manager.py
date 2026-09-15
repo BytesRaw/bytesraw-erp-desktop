@@ -25,6 +25,7 @@ from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEngineProfile
 
 from bytesraw_erp.constants import (
     APP_VERSION,
+    ATTACHMENT_DOWNLOAD_URL_PREFIXES,
     COLOR_SCHEME_COOKIE,
     REPORT_URL_PREFIXES,
     SESSION_COOKIE,
@@ -53,6 +54,17 @@ def is_report_url(url: str) -> bool:
     """
     path = QUrl(url).path()
     return any(path.startswith(prefix) for prefix in REPORT_URL_PREFIXES)
+
+
+def is_attachment_download_url(url: str) -> bool:
+    """Would navigating to this URL only ever produce a download, never a page?
+
+    Used to stop :class:`~bytesraw_erp.ui.widgets.web_view.OdooWebPage` from
+    navigating its visible view to one of these - see
+    ``OdooWebPage._on_new_window_requested``.
+    """
+    path = QUrl(url).path()
+    return any(path.startswith(prefix) for prefix in ATTACHMENT_DOWNLOAD_URL_PREFIXES)
 
 
 #: How long a printed report PDF is kept in the scratch directory. Long enough

@@ -32,6 +32,12 @@ ODOO_HOME_PATH: Final[str] = "/odoo"
 ODOO_LOGIN_PATH: Final[str] = "/web/login"
 ODOO_LOGOUT_PATH: Final[str] = "/web/session/logout"
 
+#: Everything Odoo's Point of Sale client is served under - both spellings of
+#: the route (``addons/point_of_sale/controllers/main.py:36`` registers
+#: ``/pos/web`` and ``/pos/ui``, plus ``/pos/ui/<config_id>``). Used to decide
+#: which printer a page print belongs on: a page under this prefix is a receipt.
+POS_PATH_PREFIX: Final[str] = "/pos/"
+
 RPC_AUTHENTICATE: Final[str] = "/web/session/authenticate"
 RPC_SESSION_INFO: Final[str] = "/web/session/get_session_info"
 RPC_CALL_KW: Final[str] = "/web/dataset/call_kw"
@@ -41,7 +47,31 @@ RPC_DB_LIST: Final[str] = "/web/database/list"
 #: the web client's Print button hits - it returns the PDF with a
 #: ``Content-Disposition: attachment`` header (``addons/web/controllers/report.py:138``),
 #: which QtWebEngine surfaces as a download. ``/report/pdf/`` is the inline form.
-REPORT_URL_PREFIXES: Final[tuple[str, ...]] = ("/report/download", "/report/pdf/")
+#:
+#: The three ``/account/download_*`` routes are a separate controller
+#: (``addons/account/controllers/download_docs.py``) that POS's invoice button
+#: hits via an ``ir.actions.act_url`` with ``target: "download"`` - not
+#: ``/report/download`` at all, and not the XHR-blob path either: the web
+#: client's action service opens it as a plain navigation. It always answers
+#: with ``Content-Disposition: attachment`` too, so it belongs in this list for
+#: the same reason.
+REPORT_URL_PREFIXES: Final[tuple[str, ...]] = (
+    "/report/download",
+    "/report/pdf/",
+    "/account/download_invoice_documents/",
+    "/account/download_invoice_attachments/",
+    "/account/download_move_attachments/",
+)
+
+#: The subset of the above that Odoo *always* answers with
+#: ``Content-Disposition: attachment`` - every entry except ``/report/pdf/``,
+#: which is the inline viewer form and must still be navigated to so Chromium's
+#: built-in PDF viewer can render it. A navigation to one of these never
+#: commits a document, only turns into a download, so it must never be allowed
+#: to navigate the visible view - see ``OdooWebPage._on_new_window_requested``.
+ATTACHMENT_DOWNLOAD_URL_PREFIXES: Final[tuple[str, ...]] = tuple(
+    prefix for prefix in REPORT_URL_PREFIXES if prefix != "/report/pdf/"
+)
 
 #: Odoo's own class name for an expired session, as ``serialize_exception``
 #: writes it into ``error.data.name`` (``odoo/http.py:349``). The accompanying

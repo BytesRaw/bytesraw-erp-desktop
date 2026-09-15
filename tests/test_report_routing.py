@@ -15,7 +15,7 @@ import pytest
 
 from bytesraw_erp.constants import REPORT_URL_PREFIXES
 from bytesraw_erp.services import profile_manager as pm
-from bytesraw_erp.services.profile_manager import is_report_url
+from bytesraw_erp.services.profile_manager import is_attachment_download_url, is_report_url
 
 BASE = "https://erp.example.com"
 
@@ -31,6 +31,13 @@ BASE = "https://erp.example.com"
         f"{BASE}/report/pdf/sale.report_saleorder",
         f"{BASE}/report/pdf/account.report_invoice/42",
         f"{BASE}/report/pdf/account.report_invoice/42,43,44",
+        # What POS's invoice button hits. Not /report/download at all: an
+        # ir.actions.act_url with target "download", served by
+        # addons/account/controllers/download_docs.py.
+        f"{BASE}/account/download_invoice_documents/1/pdf",
+        f"{BASE}/account/download_invoice_documents/1,2,3/pdf",
+        f"{BASE}/account/download_invoice_attachments/9",
+        f"{BASE}/account/download_move_attachments/9",
     ],
 )
 def test_report_urls_are_recognised(url: str) -> None:
@@ -71,6 +78,27 @@ def test_query_string_cannot_smuggle_a_match() -> None:
 def test_prefixes_are_absolute_paths() -> None:
     for prefix in REPORT_URL_PREFIXES:
         assert prefix.startswith("/"), f"{prefix} is not an absolute path"
+
+
+# -- what may be navigated to ----------------------------------------------
+
+
+def test_the_inline_viewer_is_the_one_report_route_still_navigated() -> None:
+    """``/report/pdf/`` renders in Chromium's PDF viewer, so it must load.
+
+    Every other report route answers with ``Content-Disposition: attachment``
+    and can only ever become a download, so navigating to one would abandon
+    the page on screen for a document that never arrives.
+    """
+    assert is_attachment_download_url(f"{BASE}/report/pdf/account.report_invoice/42") is False
+    assert is_attachment_download_url(f"{BASE}/report/download?data=%5B%5D") is True
+    assert is_attachment_download_url(f"{BASE}/account/download_invoice_documents/1/pdf") is True
+
+
+def test_an_ordinary_page_is_not_an_attachment() -> None:
+    assert is_attachment_download_url(f"{BASE}/odoo/sales/12") is False
+    assert is_attachment_download_url(f"{BASE}/pos/ui/2") is False
+    assert is_attachment_download_url("") is False
 
 
 # -- where a report lands ---------------------------------------------------

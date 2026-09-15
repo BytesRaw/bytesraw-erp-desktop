@@ -111,9 +111,10 @@ class SettingsStore:
         self._printing = settings
         self.save()
         _log.info(
-            "Print settings: mode=%s printer=%s auto_print=%s",
+            "Print settings: mode=%s report_printer=%s pos_printer=%s auto_print=%s",
             settings.mode.value,
-            settings.printer_name or "<system default>",
+            settings.report_printer_name or "<system default>",
+            settings.pos_printer_name or "<system default>",
             settings.auto_print_reports,
         )
 

@@ -252,35 +252,63 @@ class PrintSettings:
     Deliberately app-wide rather than per-account: "which printer" is a fact
     about the machine standing in front of the user, not about the Odoo
     database they happen to be signed in to.
+
+    **Two printers, because a till has two kinds of paper.** A POS receipt is
+    an 80mm thermal ticket and a QWeb report is an A4 page; one device cannot
+    take both, and a single setting meant an invoice validated in POS went to
+    the receipt roll. The device is therefore chosen by what is being printed,
+    never by one global choice - see :meth:`printer_for`.
     """
 
-    #: Dialog or straight to paper.
+    #: Dialog, preview or straight to paper. Shared by both devices on purpose:
+    #: it says how much ceremony the user wants around a print, which is a
+    #: preference about them rather than about the paper.
     mode: PrintMode = PrintMode.DIALOG
-    #: Empty string means the Windows default printer.
-    printer_name: str = SYSTEM_DEFAULT_PRINTER
+    #: The A4 device, for QWeb report PDFs. Empty means the Windows default,
+    #: which is right for an office - and is exactly why a till must choose its
+    #: receipt printer explicitly below instead of leaning on the same default.
+    report_printer_name: str = SYSTEM_DEFAULT_PRINTER
+    #: The thermal device, for POS receipts. Used for POS and nothing else.
+    pos_printer_name: str = SYSTEM_DEFAULT_PRINTER
     #: Print QWeb report PDFs as they arrive from Odoo, instead of only saving
     #: them. This is what makes Odoo's own Print button reach paper.
     auto_print_reports: bool = True
-    #: Also keep the PDF in the Downloads folder after printing it.
+    #: Also keep the PDF in the Downloads folder.
     keep_report_copy: bool = False
 
-    @property
-    def uses_system_default(self) -> bool:
-        return not self.printer_name
+    def printer_for(self, *, pos: bool) -> str:
+        """The device for this job: the receipt roll, or A4.
+
+        ``pos`` is about the *page being printed*, not about the installation.
+        A report rendered while standing in POS is still A4, so the report
+        route never asks this - it always prints on :attr:`report_printer_name`.
+        """
+        return self.pos_printer_name if pos else self.report_printer_name
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "mode": self.mode.value,
-            "printer_name": self.printer_name,
+            "report_printer_name": self.report_printer_name,
+            "pos_printer_name": self.pos_printer_name,
             "auto_print_reports": self.auto_print_reports,
             "keep_report_copy": self.keep_report_copy,
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> PrintSettings:
+        # Before there were two printers there was one, named `printer_name`,
+        # and on a till it was the thermal receipt printer - reports were not
+        # printed at all then, they were saved. Reading the old key as the POS
+        # printer preserves the only behaviour it ever produced, and leaves
+        # reports on the Windows default rather than aiming A4 at a receipt
+        # roll, which is the failure this split exists to end.
+        legacy = str(raw.get("printer_name") or SYSTEM_DEFAULT_PRINTER)
         return cls(
             mode=coerce_print_mode(raw.get("mode")),
-            printer_name=str(raw.get("printer_name") or SYSTEM_DEFAULT_PRINTER),
+            report_printer_name=str(
+                raw.get("report_printer_name") or SYSTEM_DEFAULT_PRINTER
+            ),
+            pos_printer_name=str(raw.get("pos_printer_name") or legacy),
             auto_print_reports=bool(raw.get("auto_print_reports", True)),
             keep_report_copy=bool(raw.get("keep_report_copy", False)),
         )

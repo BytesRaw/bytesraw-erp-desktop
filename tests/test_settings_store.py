@@ -28,7 +28,8 @@ def store(tmp_path: Path) -> SettingsStore:
 def test_defaults_when_no_file_exists(store: SettingsStore) -> None:
     printing = store.printing
     assert printing.mode is PrintMode.DIALOG
-    assert printing.uses_system_default is True
+    assert printing.report_printer_name == ""
+    assert printing.pos_printer_name == ""
     assert printing.auto_print_reports is True
     assert printing.keep_report_copy is False
 
@@ -37,7 +38,8 @@ def test_settings_survive_a_reload(tmp_path: Path, store: SettingsStore) -> None
     store.set_printing(
         PrintSettings(
             mode=PrintMode.DIRECT,
-            printer_name="EPSON TM-m30 Receipt",
+            report_printer_name="HP LaserJet",
+            pos_printer_name="EPSON TM-m30 Receipt",
             auto_print_reports=True,
             keep_report_copy=True,
         )
@@ -46,9 +48,9 @@ def test_settings_survive_a_reload(tmp_path: Path, store: SettingsStore) -> None
     reloaded = SettingsStore(tmp_path / "settings.json")
     reloaded.load()
     assert reloaded.printing.mode is PrintMode.DIRECT
-    assert reloaded.printing.printer_name == "EPSON TM-m30 Receipt"
+    assert reloaded.printing.report_printer_name == "HP LaserJet"
+    assert reloaded.printing.pos_printer_name == "EPSON TM-m30 Receipt"
     assert reloaded.printing.keep_report_copy is True
-    assert reloaded.printing.uses_system_default is False
 
 
 def test_writing_identical_settings_does_not_touch_the_file(
@@ -101,24 +103,61 @@ def test_unknown_print_mode_falls_back(tmp_path: Path) -> None:
 def test_partial_section_keeps_the_other_defaults(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_text(
-        json.dumps({"version": SETTINGS_VERSION, "printing": {"printer_name": "HP"}}),
+        json.dumps({"version": SETTINGS_VERSION, "printing": {"pos_printer_name": "HP"}}),
         encoding="utf-8",
     )
     store = SettingsStore(path)
     store.load()
-    assert store.printing.printer_name == "HP"
+    assert store.printing.pos_printer_name == "HP"
     assert store.printing.mode is PrintMode.DIALOG
     assert store.printing.auto_print_reports is True
+
+
+def test_the_one_printer_a_settings_file_used_to_hold_becomes_the_pos_one(
+    tmp_path: Path,
+) -> None:
+    """An upgrade must not start aiming A4 at the receipt roll.
+
+    Before the split there was a single ``printer_name``, and on a till it was
+    the thermal printer - reports were not printed at all then, they were
+    saved. Reading it as the POS printer keeps the receipt behaviour the user
+    already had, and leaves reports on the Windows default.
+    """
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": SETTINGS_VERSION,
+                "printing": {"mode": "direct", "printer_name": "EPSON TM-m30 Receipt"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = SettingsStore(path)
+    store.load()
+    assert store.printing.pos_printer_name == "EPSON TM-m30 Receipt"
+    assert store.printing.report_printer_name == ""
+    assert store.printing.mode is PrintMode.DIRECT
 
 
 def test_print_settings_round_trip() -> None:
     settings = PrintSettings(
         mode=PrintMode.DIRECT,
-        printer_name="Microsoft Print to PDF",
+        report_printer_name="Microsoft Print to PDF",
+        pos_printer_name="EPSON TM-m30 Receipt",
         auto_print_reports=False,
         keep_report_copy=True,
     )
     assert PrintSettings.from_dict(settings.to_dict()) == settings
+
+
+def test_each_kind_of_job_gets_its_own_device() -> None:
+    settings = PrintSettings(
+        report_printer_name="HP LaserJet",
+        pos_printer_name="EPSON TM-m30 Receipt",
+    )
+    assert settings.printer_for(pos=True) == "EPSON TM-m30 Receipt"
+    assert settings.printer_for(pos=False) == "HP LaserJet"
 
 
 def test_evolve_leaves_the_original_alone() -> None:
