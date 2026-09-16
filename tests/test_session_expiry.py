@@ -374,3 +374,62 @@ def test_the_probe_recovers_a_session_the_server_has_forgotten(
     page[0]._probe_session()
 
     assert signed_in == [("admin", "secret")]
+
+
+def test_a_healthy_probe_restores_the_one_allowed_retry(
+    page: tuple[OdooPage, _FakeRouter],
+    context: AppContext,
+    signed_in: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second expiry hours later is the mechanism working twice, not a loop.
+
+    The latch used to be raised by a recovery and lowered by nothing short of
+    an account switch, so a till recovered its first expiry of the day and then
+    sat on "The Odoo session keeps expiring" for every one after it - which is
+    precisely the unattended case the silent re-authentication exists for.
+    """
+    _save(context)
+    widget = page[0]
+
+    widget._on_path_changed("/odoo/sales/12")
+    widget._on_path_changed("/web/login")
+    assert len(signed_in) == 1
+
+    monkeypatch.setattr(odoo_page_module, "probe_session", lambda _client: None)
+    widget._probe_session()
+
+    widget._on_path_changed("/web/login")
+
+    assert len(signed_in) == 2, "the second expiry recovered too"
+    assert "keeps expiring" not in widget._status_banner.text()
+
+
+def test_an_expiry_the_probe_never_vouched_for_still_gives_up(
+    page: tuple[OdooPage, _FakeRouter],
+    context: AppContext,
+    signed_in: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A probe that fails to reach the server proves nothing about the session.
+
+    Only an answer restores the allowance. Restoring it on a *failed* probe
+    would hand the loop guard back to the exact server that is causing the
+    loop, which is the one place it has to hold.
+    """
+    _save(context)
+    widget = page[0]
+
+    widget._on_path_changed("/web/login")
+    assert len(signed_in) == 1
+
+    def unreachable(_client: Any) -> None:
+        raise OdooConnectionError("Could not reach https://erp.example.com")
+
+    monkeypatch.setattr(odoo_page_module, "probe_session", unreachable)
+    widget._probe_session()
+
+    widget._on_path_changed("/web/login")
+
+    assert len(signed_in) == 1
+    assert "keeps expiring" in widget._status_banner.text()

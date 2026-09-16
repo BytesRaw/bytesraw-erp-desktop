@@ -31,6 +31,13 @@ workflow refuses to build a tag that disagrees with it.
 
 ### Fixed
 
+- **A session that expires twice is now recovered twice.** The one silent
+  re-authentication allowed per expiry was being spent for the rest of the run:
+  a till recovered the first expired session of the day and then answered every
+  later one with "The Odoo session keeps expiring" instead of signing back in.
+  The allowance is restored as soon as a keepalive probe confirms the
+  replacement session is live, so a server that refuses the fresh session
+  straight away is still stopped after one attempt.
 - **Checking for updates on the Beta channel no longer reports an error.** No
   pre-release has been published yet, so the beta manifest does not exist and
   the host answers 404 - which is what an empty channel looks like, not a

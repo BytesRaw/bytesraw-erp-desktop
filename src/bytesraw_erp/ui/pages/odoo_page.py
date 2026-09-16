@@ -27,6 +27,15 @@ were on. Nothing is asked of them: the credentials have not changed, only the
 server's memory of the session has. The one thing that must not happen is a
 loop - a server that keeps refusing gets one attempt, after which the failure
 is shown like any other.
+
+That one attempt is spent *per expiry*, not per run of the application, and the
+difference is the whole point of the allowance. A session that expires, is
+recovered, and then expires again hours later at the end of its ordinary life
+is not a loop - it is the mechanism working twice - and a latch that stayed
+down would have made every till stop recovering after its first expiry of the
+day. The first probe to come back healthy is what puts the allowance back: it
+is proof that the replacement session is a real one and not another redirect to
+the login page, which is the only case the latch exists to stop.
 """
 
 from __future__ import annotations
@@ -112,9 +121,10 @@ class OdooPage(QWidget):
         self._last_path: str | None = None
         #: Where to return once the session is back.
         self._resume_path: str | None = None
-        #: One silent retry per expiry. A server that answers the re-login with
-        #: another expired session is not going to be fixed by a third attempt,
-        #: and a page that keeps signing itself in is a page in a loop.
+        #: One silent retry per expiry, put back by the first probe the
+        #: recovered session answers. A server that bounces the replacement
+        #: straight back is not going to be fixed by a third attempt; a session
+        #: that lived for hours and then expired again is not that server.
         self._recovery_spent = False
         #: The download toast, kept so its text can be rewritten as the
         #: transfer proceeds instead of stacking one toast per percent.
@@ -132,7 +142,7 @@ class OdooPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._app_bar = AppBar(allow_full_screen=context.windowed)
+        self._app_bar = AppBar()
         layout.addWidget(self._app_bar)
         self._connect_app_bar()
 
@@ -296,13 +306,21 @@ class OdooPage(QWidget):
         if client is None or self._recovering:
             return
 
+        def answered(_result: object) -> None:
+            # The session is demonstrably alive, so whatever it took to get
+            # here worked and the next expiry deserves its own silent retry.
+            # Only a *successful* probe can say that: a recovery is otherwise
+            # indistinguishable from a server that will bounce the replacement
+            # too, which is the case the allowance exists to stop.
+            self._recovery_spent = False
+
         def failed(exc: Exception) -> None:
             if isinstance(exc, OdooSessionExpired):
                 self._recover_session("Odoo signed this session out.")
             else:
                 _log.debug("Session probe could not reach the server: %s", exc)
 
-        run_async(probe_session, client, on_error=failed)
+        run_async(probe_session, client, on_success=answered, on_error=failed)
 
     def _on_session_expired(self, exc: Exception) -> bool:
         """Route an expired-session fault from an RPC call into recovery.
@@ -329,6 +347,9 @@ class OdooPage(QWidget):
         if account is None or self._recovering:
             return
         if self._recovery_spent:
+            # Straight after a recovery, before a single probe has come back
+            # healthy - so the replacement session was refused as fast as it
+            # was issued, and a third sign-in would only be the start of a loop.
             _log.warning("Session expired again straight after a recovery; giving up")
             self._show_error(
                 "The Odoo session keeps expiring. Sign in again from "
