@@ -251,10 +251,19 @@ class AppBar(QWidget):
             lambda: self.print_requested.emit(PrintMode.DIALOG)
         )
         self._register_icon(self._print_dialog_action, "printer-cog")
+        # The modes are the menu, so the one that prints nothing belongs in it
+        # too - and it is the only entry that works on a machine with no
+        # printer attached at all.
+        self._print_save_action = QAction("Save this page to Downloads", self)
+        self._print_save_action.triggered.connect(
+            lambda: self.print_requested.emit(PrintMode.SAVE)
+        )
+        self._register_icon(self._print_save_action, "download")
         for action in (
             self._print_direct_action,
             self._print_preview_action,
             self._print_dialog_action,
+            self._print_save_action,
         ):
             print_menu.addAction(action)
             self.addAction(action)

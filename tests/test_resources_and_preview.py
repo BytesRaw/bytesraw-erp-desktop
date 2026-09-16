@@ -124,7 +124,7 @@ def _make_pdf(path: Path, pages: int = 2) -> Path:
 def test_preview_is_a_distinct_persisted_mode() -> None:
     assert PrintMode.PREVIEW.value == "preview"
     assert PrintMode("preview") is PrintMode.PREVIEW
-    assert {m.value for m in PrintMode} == {"direct", "dialog", "preview"}
+    assert {m.value for m in PrintMode} == {"direct", "dialog", "preview", "save"}
 
 
 def test_every_mode_has_a_label() -> None:

@@ -11,8 +11,13 @@ With Chromium's PDF viewer enabled these open in the view and their own print
 button funnels back into the same path. A PDF that lands on disk instead can be
 printed page by page through :class:`QPdfDocument`.
 
-Each route offers three modes: straight to the default Windows printer, via
-the system print dialog, or via a preview.
+Each route offers four modes: straight to the default Windows printer, via the
+system print dialog, via a preview, or saved to the Downloads folder without
+being printed at all. The last is for a machine with no printer attached, where
+Odoo's Print button should still leave the user holding a document.
+
+A printer slot can also be left **unassigned**, which is refused rather than
+fallen back on: see :func:`_build_printer`.
 
 Note on preview: Windows' own print dialog has **no preview pane** - the Win32
 dialog simply does not offer one, and ``QPrintDialog`` exposes no such option -
@@ -54,7 +59,7 @@ from PySide6.QtPrintSupport import (
 )
 from PySide6.QtWidgets import QWidget
 
-from bytesraw_erp.data.models import PrintMode, PrintSettings
+from bytesraw_erp.data.models import NO_PRINTER, PrintMode, PrintSettings
 
 _log = logging.getLogger(__name__)
 
@@ -82,16 +87,28 @@ def available_printers() -> list[str]:
     return [info.printerName() for info in QPrinterInfo.availablePrinters()]
 
 
-def _build_printer(printer_name: str = "") -> QPrinter:
+def _build_printer(printer_name: str | None = "") -> QPrinter:
     """A high-resolution printer for ``printer_name``, or the system default.
 
     A configured printer that has since been unplugged or renamed falls back to
     the Windows default with a warning rather than failing: the user asked for
     a document, and the nearest working device beats an error dialog.
 
-    Raises :class:`PrintError` only when there is no usable printer at all,
-    which is the one failure the user can actually act on.
+    :data:`NO_PRINTER` is the one name that gets no fallback. It means the user
+    unassigned that slot, and falling back there would send the document to the
+    Windows default - which on a till is the receipt roll, the exact device an
+    unassigned A4 slot exists to keep reports away from. Every route to paper
+    goes through here, so this is the single place that guarantee holds.
+
+    Raises :class:`PrintError` when there is no usable printer, which is the
+    one failure the user can actually act on.
     """
+    if printer_name is NO_PRINTER:
+        raise PrintError(
+            "No printer is chosen for this kind of document. Pick one in "
+            "Bytesraw ERP settings, under Printing."
+        )
+
     if printer_name:
         info = QPrinterInfo.printerInfo(printer_name)
         if not info.isNull():
@@ -161,6 +178,10 @@ class PrintService(QObject):
 
     #: ``(succeeded, message)`` - message is empty on success.
     finished = Signal(bool, str)
+    #: A page was written to a PDF instead of printed, at this path. Separate
+    #: from :attr:`finished` because the outcome is a *file*, and the caller
+    #: has to be able to say where it went and offer to open it.
+    saved = Signal(Path)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -174,7 +195,7 @@ class PrintService(QObject):
         view: QWidget,
         mode: PrintMode,
         parent: QWidget | None = None,
-        printer_name: str = "",
+        printer_name: str | None = "",
     ) -> bool:
         """Print the current page of ``view``.
 
@@ -210,6 +231,37 @@ class PrintService(QObject):
         view.print(printer)
         return True
 
+    def save_view(self, view: QWidget, target: Path) -> None:
+        """Write the page in ``view`` to ``target`` as a PDF, printing nothing.
+
+        What :attr:`PrintMode.SAVE` does with a page Odoo asked to print. The
+        same ``printToPdf`` the preview route uses, pointed at a file the user
+        keeps rather than at a scratch directory - so what lands in Downloads
+        is the paginated document, not a screenshot of the page.
+
+        Completion arrives through :attr:`saved`, or through :attr:`finished`
+        with a failure. Nothing is raised: this runs from a page Odoo drove, so
+        there is no call for the caller to have wrapped in a try.
+        """
+
+        def rendered(_path: str, ok: bool) -> None:
+            with contextlib.suppress(RuntimeError, TypeError):
+                view.pdfPrintingFinished.disconnect(rendered)
+            if ok and target.exists():
+                _log.info("Saved the page to %s", target)
+                self.saved.emit(target)
+            else:
+                self.finished.emit(False, f"The page could not be saved as {target.name}.")
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.finished.emit(False, f"{target.parent} could not be written to: {exc}")
+            return
+
+        view.pdfPrintingFinished.connect(rendered)
+        view.printToPdf(str(target))
+
     # -- PDF on disk -------------------------------------------------------
 
     def print_pdf(
@@ -217,7 +269,7 @@ class PrintService(QObject):
         path: Path,
         mode: PrintMode,
         parent: QWidget | None = None,
-        printer_name: str = "",
+        printer_name: str | None = "",
     ) -> bool:
         """Print a PDF file - an Odoo report that was downloaded rather than shown.
 
@@ -257,7 +309,7 @@ class PrintService(QObject):
         self,
         view: QWidget,
         parent: QWidget | None,
-        printer_name: str,
+        printer_name: str | None,
     ) -> bool:
         """Render the page to a temporary PDF, then preview that."""
         scratch = Path(tempfile.mkdtemp(prefix="bytesraw-preview-"))

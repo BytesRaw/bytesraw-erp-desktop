@@ -30,6 +30,10 @@ class PrintMode(StrEnum):
     DIALOG = "dialog"
     #: Show a preview of the pages, with a print button.
     PREVIEW = "preview"
+    #: Print nothing at all - write the PDF to the Downloads folder instead.
+    #: For a machine with no printer of its own, where a print action should
+    #: still produce a document the user can find, mail or print elsewhere.
+    SAVE = "save"
 
     @property
     def label(self) -> str:
@@ -37,7 +41,17 @@ class PrintMode(StrEnum):
             "direct": "Print directly, without a dialog",
             "dialog": "Show the print dialog",
             "preview": "Show a print preview first",
+            "save": "Save to the Downloads folder, without printing",
         }[self.value]
+
+    @property
+    def prints(self) -> bool:
+        """Whether this mode ends at a printer.
+
+        Every mode but :attr:`SAVE` does, so the callers that must not touch a
+        printer can ask rather than each spelling out the same comparison.
+        """
+        return self is not PrintMode.SAVE
 
 
 class RenderMode(StrEnum):
@@ -244,6 +258,23 @@ class SessionContext:
 #: default when the user changes it in Windows.
 SYSTEM_DEFAULT_PRINTER = ""
 
+#: Sentinel for "no printer at all": this kind of document is not to be
+#: printed. Distinct from :data:`SYSTEM_DEFAULT_PRINTER`, and the distinction
+#: is the whole point - an empty name means "ask Windows", which on a till
+#: whose only device is a receipt roll is exactly where an A4 report must not
+#: go. ``None`` rather than another string because a printer name is a string
+#: and any string sentinel is a name somebody could give a printer.
+NO_PRINTER: str | None = None
+
+
+def coerce_printer_name(raw: object) -> str | None:
+    """Read a stored printer slot, keeping "not assigned" distinct from blank.
+
+    JSON ``null`` is :data:`NO_PRINTER`; anything else is a name, with the
+    empty string meaning the Windows default as it always has.
+    """
+    return NO_PRINTER if raw is None else str(raw)
+
 
 @dataclass(frozen=True, slots=True)
 class PrintSettings:
@@ -258,32 +289,59 @@ class PrintSettings:
     take both, and a single setting meant an invoice validated in POS went to
     the receipt roll. The device is therefore chosen by what is being printed,
     never by one global choice - see :meth:`printer_for`.
+
+    **Either device can be unassigned**, which is not the same as leaving it on
+    the Windows default: an unassigned slot means nothing of that kind is
+    printed here at all. A back office with no receipt printer and a till with
+    no A4 printer are both ordinary, and neither should have its documents sent
+    to whatever device Windows happens to name.
     """
 
-    #: Dialog, preview or straight to paper. Shared by both devices on purpose:
-    #: it says how much ceremony the user wants around a print, which is a
-    #: preference about them rather than about the paper.
+    #: Dialog, preview, straight to paper, or saved to Downloads without being
+    #: printed. Shared by both devices on purpose: it says how much ceremony
+    #: the user wants around a print, which is a preference about them rather
+    #: than about the paper.
     mode: PrintMode = PrintMode.DIALOG
     #: The A4 device, for QWeb report PDFs. Empty means the Windows default,
     #: which is right for an office - and is exactly why a till must choose its
     #: receipt printer explicitly below instead of leaning on the same default.
-    report_printer_name: str = SYSTEM_DEFAULT_PRINTER
-    #: The thermal device, for POS receipts. Used for POS and nothing else.
-    pos_printer_name: str = SYSTEM_DEFAULT_PRINTER
+    #: :data:`NO_PRINTER` means there is no A4 device here and reports must not
+    #: be sent to one.
+    report_printer_name: str | None = SYSTEM_DEFAULT_PRINTER
+    #: The thermal device, for POS receipts. Used for POS and nothing else,
+    #: and :data:`NO_PRINTER` when this machine has no receipt printer.
+    pos_printer_name: str | None = SYSTEM_DEFAULT_PRINTER
     #: Print QWeb report PDFs as they arrive from Odoo, instead of only saving
     #: them. This is what makes Odoo's own Print button reach paper.
     auto_print_reports: bool = True
     #: Also keep the PDF in the Downloads folder.
     keep_report_copy: bool = False
 
-    def printer_for(self, *, pos: bool) -> str:
+    def printer_for(self, *, pos: bool) -> str | None:
         """The device for this job: the receipt roll, or A4.
 
         ``pos`` is about the *page being printed*, not about the installation.
         A report rendered while standing in POS is still A4, so the report
         route never asks this - it always prints on :attr:`report_printer_name`.
+
+        :data:`NO_PRINTER` means this kind of document is not printed here.
         """
         return self.pos_printer_name if pos else self.report_printer_name
+
+    def prints_reports(self) -> bool:
+        """Whether a report arriving from Odoo should reach paper by itself.
+
+        Three separate ways of saying no, and they are not interchangeable:
+        the user turned automatic printing off, the mode saves instead of
+        printing, or no A4 printer is assigned to print on. The caller has to
+        say *which* when it tells the user what happened, so this is only the
+        decision, never the reason.
+        """
+        return (
+            self.auto_print_reports
+            and self.mode.prints
+            and self.report_printer_name is not NO_PRINTER
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -303,12 +361,16 @@ class PrintSettings:
         # reports on the Windows default rather than aiming A4 at a receipt
         # roll, which is the failure this split exists to end.
         legacy = str(raw.get("printer_name") or SYSTEM_DEFAULT_PRINTER)
+        # Read with a default rather than with `or`: a stored `null` is the
+        # user having unassigned that printer, which `or` would quietly turn
+        # back into the Windows default - the one device a till must not send
+        # A4 to. A missing key is the only thing that falls back.
         return cls(
             mode=coerce_print_mode(raw.get("mode")),
-            report_printer_name=str(
-                raw.get("report_printer_name") or SYSTEM_DEFAULT_PRINTER
+            report_printer_name=coerce_printer_name(
+                raw.get("report_printer_name", SYSTEM_DEFAULT_PRINTER)
             ),
-            pos_printer_name=str(raw.get("pos_printer_name") or legacy),
+            pos_printer_name=coerce_printer_name(raw.get("pos_printer_name", legacy)),
             auto_print_reports=bool(raw.get("auto_print_reports", True)),
             keep_report_copy=bool(raw.get("keep_report_copy", False)),
         )

@@ -58,6 +58,7 @@ from bytesraw_erp.constants import APP_NAME, APP_VERSION
 from bytesraw_erp.core.errors import BytesrawError
 from bytesraw_erp.core.paths import logs_dir, reports_dir
 from bytesraw_erp.data.models import (
+    NO_PRINTER,
     DisplaySettings,
     PrintMode,
     PrintSettings,
@@ -82,6 +83,17 @@ _WIDE_CONTROL = 420
 #: Stored as an empty printer name - resolved to whatever Windows says at print
 #: time, so the setting keeps following the OS default when the user changes it.
 _SYSTEM_DEFAULT = ""
+
+
+def _printer_choice(combo: QComboBox) -> str | None:
+    """What a printer picker currently holds, keeping "not assigned" itself.
+
+    ``None`` is :data:`NO_PRINTER` and must survive as ``None``: coercing it to
+    a string would give ``"None"``, and ``or ""`` would give the Windows
+    default - the device an unassigned report slot exists to avoid.
+    """
+    data = combo.currentData()
+    return NO_PRINTER if data is NO_PRINTER else str(data)
 
 
 def _describe_age(when: datetime) -> str:
@@ -223,16 +235,22 @@ class SettingsPage(QWidget):
 
         self._mode = QComboBox()
         self._mode.setMaximumWidth(_WIDE_CONTROL)
-        for mode in (PrintMode.DIALOG, PrintMode.DIRECT, PrintMode.PREVIEW):
+        for mode in (PrintMode.DIALOG, PrintMode.DIRECT, PrintMode.PREVIEW, PrintMode.SAVE):
             self._mode.addItem(mode.label, mode.value)
+        self._mode.setToolTip(
+            "How a print that Odoo starts by itself reaches paper - a Point of "
+            "Sale receipt, or a report you pressed Print on.\n"
+            "Windows' own print dialog has no preview pane, so choose 'Show a "
+            "print preview first' to see the pages before they are printed.\n"
+            "'Save to the Downloads folder' prints nothing at all, for a "
+            "machine with no printer attached."
+        )
         self._mode.currentIndexChanged.connect(self._on_printing_changed)
         card.body.addWidget(
             Field(
                 "When Odoo prints",
                 self._mode,
-                "Windows' own print dialog has no preview pane, so choose "
-                "'Show a print preview first' if you want to see the pages "
-                "before they are printed.",
+                "Saving puts the PDF in Downloads and prints nothing.",
             )
         )
 
@@ -407,10 +425,11 @@ class SettingsPage(QWidget):
             self._mode.setCurrentIndex(max(self._mode.findData(settings.mode.value), 0))
             self._select_printer(self._report_printer, settings.report_printer_name, "report")
             self._select_printer(self._pos_printer, settings.pos_printer_name, "receipt")
-            self._auto_print.setChecked(settings.auto_print_reports)
-            # Not gated on auto-print: with printing off this is the only thing
-            # that keeps a report anywhere the user can find it.
-            self._keep_copy.setChecked(settings.keep_report_copy)
+            # Not gated on auto-print: with printing off, keeping a copy is
+            # the only thing that leaves a report anywhere the user can find
+            # it. Only the saving mode, which keeps one unconditionally, takes
+            # that choice away.
+            self._sync_printing_controls(settings)
             self._refresh_printer_hint(settings)
             self._load_updates()
             self._storage_hint.setText(str(self._context.settings.path))
@@ -418,24 +437,57 @@ class SettingsPage(QWidget):
             self._loading = False
 
     def _populate_printers(self) -> None:
+        """Fill both pickers: the Windows default, "not assigned", then devices.
+
+        "Not assigned" carries ``None`` as its item data, which is
+        :data:`NO_PRINTER` itself rather than a stand-in for it - no string can
+        do that job, because every string is a name somebody could give a
+        printer. ``currentData()`` returns ``None`` for an empty combo too, but
+        a combo is only empty inside this method, and ``_loading`` is up
+        throughout the one reload that calls it.
+        """
         default = default_printer_name()
         label = f"Windows default ({default})" if default else "Windows default (none set)"
         names = available_printers()
         for combo in (self._report_printer, self._pos_printer):
             combo.clear()
             combo.addItem(label, _SYSTEM_DEFAULT)
+            combo.addItem("Not assigned - do not print", NO_PRINTER)
             for name in names:
                 combo.addItem(name, name)
 
     def _refresh_printer_hint(self, settings: PrintSettings) -> None:
-        """Warn when both kinds of paper would come out of one device.
+        """Say what the two pickers add up to, when it is not obvious.
 
-        "Windows default" is the right default for reports and a trap on a
-        till, where the default printer is usually the receipt printer - which
-        is the very thing that sent A4 invoices to an 80mm roll. The check is
-        on the resolved device rather than on the printer's name: guessing
-        "thermal" from a model name would be wrong on the machines that matter.
+        Two things can need saying. An unassigned slot prints nothing of that
+        kind, which is the point of choosing it but is worth confirming rather
+        than leaving the user to discover on the next receipt. And both slots
+        resolving to one device is the trap "Windows default" sets on a till,
+        where the default printer is usually the receipt printer - the very
+        thing that sent A4 invoices to an 80mm roll. That check is on the
+        resolved device rather than on the printer's name: guessing "thermal"
+        from a model name would be wrong on the machines that matter.
         """
+        unassigned = [
+            what
+            for what, name in (
+                ("reports", settings.report_printer_name),
+                ("Point of Sale receipts", settings.pos_printer_name),
+            )
+            if name is NO_PRINTER
+        ]
+        if unassigned:
+            # The two slots do not fail the same way, and the difference is
+            # deliberate: a report PDF already exists and would be deleted
+            # within a day, so it is kept; a receipt is a page that was never
+            # rendered, and saving one per order would bury the user's
+            # Downloads folder in tickets nobody asked for.
+            text = f"Nothing will be printed for {' or '.join(unassigned)}."
+            if settings.report_printer_name is NO_PRINTER:
+                text += " A report Odoo prints is saved in Downloads instead."
+            self._printer_hint.setText(text)
+            return
+
         default = default_printer_name()
         report = settings.report_printer_name or default
         pos = settings.pos_printer_name or default
@@ -448,7 +500,7 @@ class SettingsPage(QWidget):
         else:
             self._printer_hint.setText("")
 
-    def _select_printer(self, combo: QComboBox, name: str, what: str) -> None:
+    def _select_printer(self, combo: QComboBox, name: str | None, what: str) -> None:
         """Show the stored printer, or say plainly that it has gone."""
         index = combo.findData(name)
         if index < 0:
@@ -535,20 +587,57 @@ class SettingsPage(QWidget):
     def _on_printing_changed(self, *_args: object) -> None:
         if self._loading:
             return
+        mode = PrintMode(str(self._mode.currentData()))
+        # In the saving mode both checkboxes are showing a decision the mode
+        # already made, so what they display is not what the user chose. The
+        # *outgoing* mode matters as much as the incoming one: on the way back
+        # out they are still showing those forced values and have not been
+        # rewritten yet, so reading them there is what would quietly adopt
+        # them. Either end of the trip reads storage instead, and the user's
+        # own choice survives the round trip untouched.
+        stored = self._context.settings.printing
+        forced = not mode.prints or not stored.mode.prints
         settings = PrintSettings(
-            mode=PrintMode(str(self._mode.currentData())),
-            report_printer_name=str(self._report_printer.currentData() or _SYSTEM_DEFAULT),
-            pos_printer_name=str(self._pos_printer.currentData() or _SYSTEM_DEFAULT),
-            auto_print_reports=self._auto_print.isChecked(),
-            keep_report_copy=self._keep_copy.isChecked(),
+            mode=mode,
+            report_printer_name=_printer_choice(self._report_printer),
+            pos_printer_name=_printer_choice(self._pos_printer),
+            auto_print_reports=(
+                stored.auto_print_reports if forced else self._auto_print.isChecked()
+            ),
+            keep_report_copy=(
+                stored.keep_report_copy if forced else self._keep_copy.isChecked()
+            ),
         )
         try:
             self._context.settings.set_printing(settings)
         except BytesrawError as exc:
             self._banner.show_error(str(exc))
             return
+        self._sync_printing_controls(settings)
         self._refresh_printer_hint(settings)
         self._banner.show_info("Print settings saved.")
+
+    def _sync_printing_controls(self, settings: PrintSettings) -> None:
+        """Show what the mode has already settled, instead of offering it twice.
+
+        In the saving mode nothing is printed and the PDF is always kept, so
+        both checkboxes are answers rather than questions: they are set to the
+        truth and disabled. A checkbox reading "Print reports as soon as they
+        arrive", ticked, on a machine that is saving them instead, would be a
+        plain lie about what the app is doing.
+
+        The stored settings are not touched, which is why ``_on_printing_changed``
+        reads them rather than the widgets while this is in force.
+        """
+        saving = not settings.mode.prints
+        previous, self._loading = self._loading, True
+        try:
+            self._auto_print.setChecked(False if saving else settings.auto_print_reports)
+            self._keep_copy.setChecked(True if saving else settings.keep_report_copy)
+        finally:
+            self._loading = previous
+        self._auto_print.setEnabled(not saving)
+        self._keep_copy.setEnabled(not saving)
 
     # -- updates -----------------------------------------------------------
 

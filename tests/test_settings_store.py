@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from bytesraw_erp.constants import SETTINGS_VERSION
-from bytesraw_erp.data.models import PrintMode, PrintSettings
+from bytesraw_erp.data.models import NO_PRINTER, PrintMode, PrintSettings
 from bytesraw_erp.data.settings_store import SettingsStore
 
 
@@ -165,3 +165,57 @@ def test_evolve_leaves_the_original_alone() -> None:
     changed = base.evolve(mode=PrintMode.DIRECT)
     assert changed.mode is PrintMode.DIRECT
     assert base.mode is PrintMode.DIALOG
+
+
+# -- a printer slot left unassigned ------------------------------------------
+
+
+def test_an_unassigned_printer_is_not_the_windows_default(
+    tmp_path: Path, store: SettingsStore
+) -> None:
+    """The two mean opposite things and must not collapse into each other.
+
+    An empty name asks Windows which device to use; ``NO_PRINTER`` says not to
+    print at all. Reading the stored ``null`` with ``or`` would turn the second
+    into the first - and on a till the Windows default is the receipt roll, the
+    one device an unassigned A4 slot exists to keep reports away from.
+    """
+    store.set_printing(
+        PrintSettings(report_printer_name=NO_PRINTER, pos_printer_name="EPSON TM-m30")
+    )
+
+    raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert raw["printing"]["report_printer_name"] is None
+
+    reloaded = SettingsStore(tmp_path / "settings.json")
+    reloaded.load()
+    assert reloaded.printing.report_printer_name is NO_PRINTER
+    assert reloaded.printing.report_printer_name != ""
+    assert reloaded.printing.printer_for(pos=False) is NO_PRINTER
+    assert reloaded.printing.printer_for(pos=True) == "EPSON TM-m30"
+
+
+def test_a_missing_printer_key_is_still_the_windows_default(tmp_path: Path) -> None:
+    """Only an explicit null unassigns; an older file has no opinion at all."""
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"version": SETTINGS_VERSION, "printing": {"mode": "direct"}}),
+        encoding="utf-8",
+    )
+    store = SettingsStore(path)
+    store.load()
+    assert store.printing.report_printer_name == ""
+    assert store.printing.pos_printer_name == ""
+
+
+def test_the_saving_mode_round_trips(tmp_path: Path, store: SettingsStore) -> None:
+    """A new mode value an older build cannot read still falls back cleanly."""
+    store.set_printing(PrintSettings(mode=PrintMode.SAVE))
+    raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert raw["printing"]["mode"] == "save"
+
+    reloaded = SettingsStore(tmp_path / "settings.json")
+    reloaded.load()
+    assert reloaded.printing.mode is PrintMode.SAVE
+    assert reloaded.printing.mode.prints is False
+    assert reloaded.printing.prints_reports() is False

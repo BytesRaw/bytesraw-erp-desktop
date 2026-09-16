@@ -72,7 +72,13 @@ from bytesraw_erp.core.errors import (
     OdooSessionExpired,
 )
 from bytesraw_erp.core.paths import downloads_dir
-from bytesraw_erp.data.models import Account, PrintMode, SessionContext
+from bytesraw_erp.data.models import (
+    NO_PRINTER,
+    Account,
+    PrintMode,
+    PrintSettings,
+    SessionContext,
+)
 from bytesraw_erp.services.print_service import PrintError
 from bytesraw_erp.services.session_service import (
     apply_odoo_color_scheme,
@@ -100,6 +106,24 @@ _UPDATE_TOAST_MS = 30_000
 #: It is dismissed explicitly when the download ends, in either direction, so
 #: this is only the backstop for a transfer that stalls without erroring.
 _DOWNLOAD_TOAST_MS = 30 * 60 * 1000
+
+
+def _free_download_path(name: str) -> Path:
+    """A path in Downloads that nothing is using, from ``name``.
+
+    Chromium numbers a duplicate download itself; a file this app writes has to
+    do its own, or the second report of the day silently replaces the first.
+    ``downloads_dir`` is looked up here, in this module, which is also the name
+    the tests patch - importing it by value means patching ``core.paths`` does
+    nothing and a stray test writes into a real Downloads folder.
+    """
+    stem, suffix = Path(name).stem, Path(name).suffix
+    target = downloads_dir() / name
+    counter = 1
+    while target.exists():
+        target = downloads_dir() / f"{stem} ({counter}){suffix}"
+        counter += 1
+    return target
 
 
 class OdooPage(QWidget):
@@ -167,6 +191,7 @@ class OdooPage(QWidget):
         context.session_changed.connect(self._app_bar.set_session)
         context.theme.theme_changed.connect(self._on_theme_changed)
         context.printing.finished.connect(self._on_print_finished)
+        context.printing.saved.connect(self._on_page_saved)
         context.profiles.report_downloaded.connect(self._on_report_downloaded)
         context.profiles.file_downloaded.connect(self._on_file_downloaded)
         # A failed *check* is deliberately not connected: a till between access
@@ -613,8 +638,16 @@ class OdooPage(QWidget):
         return self._web is not None and self._web.current_path().startswith(POS_PATH_PREFIX)
 
     def _print(self, mode: PrintMode) -> None:
-        """Print the page with an explicit mode, on the printer for this screen."""
+        """Print the page with an explicit mode, on the printer for this screen.
+
+        This is the bar's menu: the user picked the mode themselves, so an
+        unassigned printer is reported as the error it is rather than passed
+        over quietly.
+        """
         if self._web is None or self._stack.currentWidget() is not self._web:
+            return
+        if not mode.prints:
+            self._save_page()
             return
         settings = self._context.settings.printing
         try:
@@ -629,8 +662,46 @@ class OdooPage(QWidget):
 
         Honours the configured mode, so a till set to print directly puts a
         receipt on paper without anyone touching a dialog.
+
+        Odoo drove this, not the user, so an unassigned printer is not an error
+        here - it is the configuration doing what it was asked. It still gets a
+        toast: a Print button that produces nothing anywhere, with no word of
+        why, is the silent loss this file already learned about once.
         """
-        self._print(self._context.settings.printing.mode)
+        settings = self._context.settings.printing
+        if not settings.mode.prints:
+            self._save_page()
+            return
+        if settings.printer_for(pos=self._is_pos()) is NO_PRINTER:
+            which = "receipt" if self._is_pos() else "report"
+            _log.info("No %s printer is assigned; the page was not printed", which)
+            self._toasts.show_message(
+                f"No {which} printer is assigned, so nothing was printed.",
+                action_text="Settings",
+                on_action=lambda: self._router.go(ROUTE_SETTINGS),
+            )
+            return
+        self._print(settings.mode)
+
+    def _save_page(self) -> None:
+        """Write the page to Downloads instead of printing it.
+
+        The whole of :attr:`PrintMode.SAVE`. The name is what the file will be
+        called in the user's Downloads folder, so it says what the document is
+        rather than repeating the page title, which in Odoo is the record's.
+        """
+        if self._web is None or self._stack.currentWidget() is not self._web:
+            return
+        name = "POS receipt.pdf" if self._is_pos() else "Odoo page.pdf"
+        self._context.printing.save_view(self._web, _free_download_path(name))
+
+    def _on_page_saved(self, path: Path) -> None:
+        """A page was written to Downloads rather than printed."""
+        self._toasts.show_message(
+            f"Saved {path.name} to {path.parent.name}",
+            action_text="Show in folder",
+            on_action=lambda: self._reveal(path),
+        )
 
     def _on_report_downloaded(self, path: Path) -> None:
         """A QWeb report PDF arrived from Odoo. Print it per local settings.
@@ -639,18 +710,26 @@ class OdooPage(QWidget):
         answers a print action with a PDF download, which a plain browser would
         simply drop in the Downloads folder. It always prints on the A4
         printer - a report is an A4 document even when POS produced it.
+
+        Three separate things can say the report is not to be printed, and they
+        are told apart on purpose: the mode saves instead of printing, no A4
+        printer is assigned, or automatic printing is simply off. All three end
+        in a Downloads copy and a toast that says which one it was, because a
+        report that is neither printed nor findable is gone - the scratch
+        directory it arrived in is pruned within a day.
         """
         settings = self._context.settings.printing
-        copied = self._keep_copy(path) if settings.keep_report_copy else None
+        printing = settings.prints_reports()
+        # Copy it when asked to, and whenever nothing is going to print it: in
+        # that case Downloads is the only place it will still exist tomorrow.
+        copied = self._keep_copy(path) if settings.keep_report_copy or not printing else None
 
-        if not settings.auto_print_reports:
-            # Say where it went. Without this the report is invisible: it sits
-            # in the scratch directory, is pruned within a day, and the user
-            # who pressed Print in Odoo sees nothing happen anywhere.
+        if not printing:
             landed = copied or path
-            _log.info("Automatic report printing is off; kept %s", landed)
+            reason = self._why_not_printed(settings)
+            _log.info("%s; kept %s", reason, landed)
             self._toasts.show_message(
-                f"Saved {landed.name}",
+                f"Saved {landed.name} - {reason.lower()}",
                 action_text="Show in folder",
                 on_action=lambda: self._reveal(landed),
             )
@@ -661,13 +740,18 @@ class OdooPage(QWidget):
         except PrintError as exc:
             QMessageBox.warning(self, "Print", str(exc))
 
+    @staticmethod
+    def _why_not_printed(settings: PrintSettings) -> str:
+        """Which of the three reasons stopped this report at the Downloads folder."""
+        if not settings.mode.prints:
+            return "Reports are set to be saved"
+        if settings.report_printer_name is NO_PRINTER:
+            return "No report printer is assigned"
+        return "Automatic report printing is off"
+
     def _keep_copy(self, path: Path) -> Path | None:
         """Copy a report into Downloads, without clobbering a namesake."""
-        target = downloads_dir() / path.name
-        counter = 1
-        while target.exists():
-            target = downloads_dir() / f"{path.stem} ({counter}){path.suffix}"
-            counter += 1
+        target = _free_download_path(path.name)
         try:
             shutil.copy2(path, target)
         except OSError as exc:

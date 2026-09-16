@@ -38,6 +38,20 @@ workflow refuses to build a tag that disagrees with it.
   six-pixel border the window insets itself by. The border is only there while
   the window is loose: maximised and full screen have no size to change, so it
   goes and the app fills the screen exactly as before.
+- **"Save to the Downloads folder" as a way for Odoo to print.** Chosen under
+  Settings -> Printing -> When Odoo prints, it sends nothing to a printer: a
+  report Odoo renders is kept in Downloads, and a Point of Sale receipt is
+  written there as a PDF instead of coming out on paper. For a machine with no
+  printer attached, where Odoo's Print button previously produced nothing
+  anybody could find. The app bar's print menu gained the same entry, so one
+  page can be saved without changing the setting.
+- **Either printer can be left unassigned.** "Not assigned - do not print" is
+  now a choice in both the report and the receipt picker, and it is not the
+  same as leaving one on the Windows default: nothing of that kind is printed
+  at all. A back office with no receipt printer and a till with no A4 printer
+  are both ordinary, and neither should have its documents sent to whatever
+  device Windows happens to name. A report that is not printed is still saved
+  in Downloads and named in a notification, so it cannot go missing.
 
 ### Changed
 

@@ -195,6 +195,7 @@ def test_the_print_button_only_opens_its_menu(bar: AppBar) -> None:
         "Print this page",
         "Print preview of this page...",
         "Print this page with options...",
+        "Save this page to Downloads",
         "Printer settings...",
     ]
 
@@ -207,8 +208,16 @@ def test_every_mode_is_an_entry_in_the_menu(bar: AppBar) -> None:
     bar._print_direct_action.trigger()
     bar._print_preview_action.trigger()
     bar._print_dialog_action.trigger()
+    bar._print_save_action.trigger()
 
-    assert fired == [PrintMode.DIRECT, PrintMode.PREVIEW, PrintMode.DIALOG]
+    assert fired == [
+        PrintMode.DIRECT,
+        PrintMode.PREVIEW,
+        PrintMode.DIALOG,
+        # Saving is a mode like any other, and the only entry that does
+        # anything on a machine with no printer attached at all.
+        PrintMode.SAVE,
+    ]
 
 
 def test_ctrl_p_can_actually_reach_the_action(bar: AppBar) -> None:
