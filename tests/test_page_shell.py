@@ -16,7 +16,14 @@ Three things here are load-bearing and all three fail silently:
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QLabel, QPushButton, QScrollArea, QToolButton, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QToolButton,
+    QWidget,
+)
 
 from bytesraw_erp.ui.theme import DARK, LIGHT
 from bytesraw_erp.ui.widgets.page import CardColumns, PageShell
@@ -56,20 +63,41 @@ def test_the_shell_carries_its_own_caption_buttons(shell: PageShell) -> None:
     assert shell.findChild(WindowControls) is not None
 
 
-def test_the_full_screen_toggle_follows_the_launch_mode(qtbot) -> None:
-    """Same rule as the app bar's: the toggle exists only where it can deliver.
+def test_the_band_carries_the_same_four_controls_as_the_app_bar(qtbot) -> None:
+    """A screen outside Odoo is not a screen with fewer ways to size the window.
 
-    A full-screen launch has one size, so the button is not built rather than
-    built and disabled - ``findChildren`` would still report it otherwise.
+    These used to depend on the launch mode, which meant the account form -
+    the first screen a fresh machine ever shows - could offer two buttons
+    while the app bar offered three.
     """
-    plain = PageShell("Accounts", windowed=False)
-    qtbot.addWidget(plain)
-    windowed = PageShell("Accounts", windowed=True)
-    qtbot.addWidget(windowed)
+    shell = PageShell("Accounts")
+    qtbot.addWidget(shell)
 
-    assert plain.window_controls.findChild(QToolButton, "FullScreenButton") is None
-    assert len(plain.window_controls.findChildren(QToolButton)) == 2
-    assert windowed.window_controls.findChild(QToolButton, "FullScreenButton") is not None
+    names = {
+        button.objectName() for button in shell.window_controls.findChildren(QToolButton)
+    }
+    assert names == {
+        "MinimizeButton",
+        "MaximizeButton",
+        "FullScreenButton",
+        "CloseButton",
+    }
+
+
+def test_the_band_moves_the_window_like_a_title_bar(qtbot) -> None:
+    """The band carries the caption buttons, so it carries the caption's grip.
+
+    Pinned by the filter being installed rather than by synthesising a drag:
+    the move itself is ``startSystemMove``, which hands the window to the
+    window manager and cannot be observed from inside the process.
+    """
+    from bytesraw_erp.ui.widgets.window_drag import _WindowDragFilter
+
+    shell = PageShell("Accounts")
+    qtbot.addWidget(shell)
+    band = shell.findChild(QFrame, "PageHeader")
+    assert band is not None
+    assert band.findChildren(_WindowDragFilter), "the header band is not draggable"
 
 
 def test_a_theme_change_re_strokes_the_caption_glyphs(shell: PageShell) -> None:

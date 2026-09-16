@@ -1,17 +1,34 @@
 """The single application window and its route table.
 
-The window is full screen for its whole life. That is a product decision, not a
-default: this is a till and back-office shell, and a resizable window invites
-someone to leave a sliver of the desktop showing, drag Odoo half off the screen,
-or lose the app behind Explorer mid-transaction. Full screen also covers the
-Windows taskbar, so the only chrome on the display is the app's own.
+The window launches full screen and stays there unless someone deliberately
+asks for otherwise. That is a product decision, not a default: this is a till
+and back-office shell, and a window that drifts out of full screen by accident
+leaves a sliver of the desktop showing, Odoo half off the screen, or the app
+lost behind Explorer mid-transaction. Full screen also covers the Windows
+taskbar, so the only chrome on the display is the app's own.
 
-The cost of that is the title bar, and with it the minimise and close buttons.
-They come back as :class:`WindowControls` inside the app bar, and inside the
-header band of every page built on
+The window is **frameless**, so the app bar is the title bar rather than a
+second strip of chrome under one. It did not have to be, and for a while it was
+not: Windows draws no caption for a *full-screen* window, so an ordinary framed
+window looked right for as long as full screen was the only size it had. The
+moment restore and maximise became reachable the real frame appeared underneath
+the app bar, with its own copy of the buttons the bar already carries.
+
+Everything a caption did is therefore rebuilt: the buttons by
+:class:`WindowControls`, the grip by :mod:`.widgets.window_drag`, and the resize
+border by :class:`~bytesraw_erp.ui.widgets.window_resize.ResizeFrame`. The
+buttons live in the app bar and in the header band of every page built on
 :class:`~bytesraw_erp.ui.widgets.page.PageShell` - the account list, the
-account form and the settings page - so the caption buttons are in the same
-corner of every screen in the product.
+account form and the settings page - so they are in the same corner of every
+screen in the product.
+
+What a frameless window gives up, measured rather than assumed: the Windows 11
+Snap Layouts flyout that appears when hovering a *native* maximise button, the
+drop shadow, and the rounded corners. What it keeps, also measured: maximising
+to the available area rather than over the taskbar, drag-to-edge Aero Snap, and
+resizing from all eight edges. Getting the first three back means a Win32 custom
+frame (``WM_NCCALCSIZE``), which is a second, Windows-only code path for a
+window that is full screen nearly all of its life.
 
 The floating set this window owns is the net under that, not the normal path.
 It appears only over a page that provides no controls of its own, because a
@@ -21,10 +38,19 @@ the shipped routes nothing reaches it any more; it stays because the cost of
 keeping it is a hidden QFrame and the cost of being wrong about it is a till
 that cannot be closed.
 
-Launching with ``--windowed`` suspends all of that: the window keeps its frame,
-keeps its taskbar button, and the caption buttons grow a full-screen toggle,
-because in that mode the window really does have two sizes. That is the only
-configuration in which the toggle exists - see :mod:`.widgets.window_controls`.
+Launching with ``--windowed`` starts in an ordinary resizable window instead,
+with its frame and its taskbar button.
+
+The window is no longer *pinned* full screen in either mode, and the correction
+above is what keeps that from being a change in behaviour. It is armed and
+disarmed by the window's own show calls: ``showFullScreen`` raises
+``_full_screen_intended``, ``showNormal`` and ``showMaximized`` lower it. So a
+till nobody touches launches full screen, has every accidental departure from it
+corrected exactly as before, and a user who deliberately presses the maximise
+button, the full-screen toggle or F11 is not fought by the shell. Those three
+are the *only* ways down, and each of them goes through one of the show calls -
+which is why the arming lives there rather than in a handler that would have to
+guess whether a state change was meant.
 """
 
 from __future__ import annotations
@@ -61,6 +87,7 @@ from bytesraw_erp.ui.router import Router
 from bytesraw_erp.ui.theme import Palette
 from bytesraw_erp.ui.widgets.icons import set_icon_color
 from bytesraw_erp.ui.widgets.window_controls import WindowControls
+from bytesraw_erp.ui.widgets.window_resize import ResizeFrame
 
 _log = logging.getLogger(__name__)
 
@@ -73,16 +100,24 @@ _WINDOWED_SIZE = (1440, 900)
 
 
 class MainWindow(QMainWindow):
-    """Hosts the router. All navigation happens inside one full-screen window."""
+    """Hosts the router. All navigation happens inside this one window."""
 
     def __init__(self, context: AppContext) -> None:
         super().__init__()
         self._context = context
         self.setWindowTitle(APP_NAME)
+        # The app bar is the title bar. This has to be set before the window is
+        # ever shown - changing the flags on a visible window destroys and
+        # recreates its native handle, which would take the web view with it.
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         #: Set the moment a close is accepted. Everything that could re-show
         #: the window, or start work whose result nobody will be alive to
         #: receive, checks it first.
         self._closing = False
+        #: Whether full screen is the state this window is supposed to be in.
+        #: Raised and lowered by the show overrides below, and read by the
+        #: correction that puts an accidental departure right.
+        self._full_screen_intended = False
 
         # Before any page is built: an icon is stroked in whatever colour was
         # last set, and the default is the light palette's near-black. The app
@@ -116,11 +151,18 @@ class MainWindow(QMainWindow):
         self._overlay = self._build_overlay()
         self.router.route_changed.connect(lambda _path: self._sync_overlay())
 
-        if context.windowed:
-            self.resize(*_WINDOWED_SIZE)
-            # F11 is the only shortcut a full-screen toggle is ever bound to,
-            # and a user who found the button will try it.
-            QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_full_screen)
+        # After the central widget, so the grips are on top of it; it inserts
+        # the margin they sit in rather than laying them over the page.
+        self._frame = ResizeFrame(self)
+
+        # Sized even for the full-screen launch, which never shows this
+        # geometry: it is what the window restores *down* to the first time
+        # someone leaves full screen, and a window that has only ever been full
+        # screen has no size of its own to come back to.
+        self.resize(*_WINDOWED_SIZE)
+        # F11 is the shortcut a full-screen toggle is always bound to, and a
+        # user who found the button will try it.
+        QShortcut(QKeySequence(Qt.Key.Key_F11), self, self._toggle_full_screen)
 
         # Connected before any page exists, so this runs first on every theme
         # change: the new icon colour is in place by the time a page's own
@@ -156,13 +198,37 @@ class MainWindow(QMainWindow):
 
     # -- full screen -------------------------------------------------------
 
+    def showFullScreen(self) -> None:
+        """Go full screen, and record that full screen is now the intent.
+
+        Shadowing the three show calls is what keeps the correction below from
+        fighting the user. Every deliberate change of size in the product goes
+        through one of them - the caption buttons, F11 and a double-click on
+        the app bar all call them by name from Python - while an *accidental*
+        departure is Qt or the shell writing the window state directly, which
+        reaches ``changeEvent`` without ever touching the flag. So the
+        difference between "the user asked for this" and "something dropped
+        it" is recorded at the one point where it is still known.
+        """
+        self._full_screen_intended = True
+        super().showFullScreen()
+
+    def showNormal(self) -> None:
+        self._full_screen_intended = False
+        super().showNormal()
+
+    def showMaximized(self) -> None:
+        self._full_screen_intended = False
+        super().showMaximized()
+
     def changeEvent(self, event: QEvent) -> None:
-        """Put the window straight back into full screen if anything leaves it.
+        """Put the window straight back into full screen if anything drops it.
 
         Alt+Tab, a shell command or Qt itself can drop the flag; minimising is
-        the one departure that is allowed, because the app bar offers it. A
-        windowed launch opts out of the whole mechanism - there the user owns
-        the size.
+        the one departure that is always allowed, because the app bar offers
+        it. The correction only runs while full screen is the intended state -
+        a windowed launch never sets it, and the caption buttons and F11 clear
+        it when the user asks for a smaller window.
 
         The correction is queued rather than applied here: calling
         ``showFullScreen`` from inside the state change that triggered it
@@ -173,15 +239,14 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() is not QEvent.Type.WindowStateChange:
             return
-        self._sync_full_screen_controls()
-        if not self._context.windowed:
-            QTimer.singleShot(0, self._enforce_full_screen)
+        self._sync_window_controls()
+        QTimer.singleShot(0, self._enforce_full_screen)
 
     def _enforce_full_screen(self) -> None:
         # The queued correction can outlive the click that closed the window.
         # Without this guard `showFullScreen` puts a window that is on its way
         # out back on screen, and the close has to be asked for twice.
-        if self._closing or self._context.windowed:
+        if self._closing or not self._full_screen_intended:
             return
         state = self.windowState()
         if state & Qt.WindowState.WindowMinimized:
@@ -190,27 +255,26 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
     def _toggle_full_screen(self) -> None:
-        """F11, and the caption button's twin. Windowed launches only."""
-        if not self._context.windowed:
-            return
+        """F11, and the caption button's twin."""
         if self.isFullScreen():
             self.showNormal()
         else:
             self.showFullScreen()
-        self._sync_full_screen_controls()
+        self._sync_window_controls()
 
-    def _sync_full_screen_controls(self) -> None:
+    def _sync_window_controls(self) -> None:
         """Point every toggle on screen at the state it will move the window to.
 
-        There are two sets - the app bar's and the floating overlay's - and
-        full screen can also be left by F11 or by the shell, so neither can
-        rely on having been the thing that changed it.
+        There are two sets - the app bar's or the page band's, and the floating
+        overlay's - and the size can also change by F11, by a double-click on
+        the app bar or by the shell, so neither set can rely on having been the
+        thing that changed it.
         """
         # Swept rather than addressed: the overlay's set is a child of this
-        # window and the app bar's is buried in a page, and a state change can
+        # window and a page's is buried in the stack, and a state change can
         # arrive before either exists.
         for controls in self.findChildren(WindowControls):
-            controls.sync_full_screen()
+            controls.sync_window_state()
 
     # -- floating window controls ------------------------------------------
 
@@ -231,9 +295,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(frame)
         row.setContentsMargins(5, 5, 5, 5)
         row.setSpacing(0)
-        self._overlay_controls = WindowControls(
-            allow_full_screen=self._context.windowed
-        )
+        self._overlay_controls = WindowControls()
         row.addWidget(self._overlay_controls)
         self._overlay_controls.apply_theme(self._context.theme.palette)
         frame.hide()

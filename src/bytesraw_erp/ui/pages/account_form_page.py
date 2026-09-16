@@ -84,7 +84,6 @@ class AccountFormPage(QWidget):
             "Connect to an Odoo 19 server. The password is kept in Windows "
             "Credential Manager, never in a file.",
             width=WIDTH_FORM,
-            windowed=context.windowed,
         )
         self._banner = self._shell.banner
         outer = QVBoxLayout(self)

@@ -45,10 +45,9 @@ class AppContext(QObject):
         super().__init__(parent)
         #: True when the app was launched with ``--windowed``. The shell is a
         #: full-screen till by default; this is the escape hatch for a
-        #: developer or a back-office machine that needs the desktop as well,
-        #: and it is what puts a full-screen toggle in the caption buttons.
-        #: Lives here because the app bar has to know too, and it is built
-        #: inside a page that only ever sees this context.
+        #: developer or a back-office machine that needs the desktop as well.
+        #: It governs the *first* paint only - the caption buttons can take the
+        #: window between full screen, maximised and loose in either mode.
         self.windowed = windowed
         self.store = AccountStore()
         self.profiles = ProfileManager(self)

@@ -14,12 +14,17 @@ deliberately *outside* the scroll area: on a till screen the way out of a page
 user has to scroll up to find.
 
 **The caption buttons live in the band.** The window has no title bar, so every
-screen without an app bar needs its own minimise/close pair, and
+screen without an app bar needs its own set, and
 :class:`~bytesraw_erp.ui.main_window.MainWindow` floats one over any page that
 provides none. A page built on this shell provides one - the window's sweep for
 ``WindowControls`` finds it and the floating pair stays hidden - which is what
 puts the caption buttons in the same place on every screen in the product
 rather than in the app bar on one and over the top of the page on the others.
+
+The band is the rest of a title bar too: its blank space drags the window and a
+double-click on it maximises or restores, exactly as the app bar's does. A
+screen that carries the caption buttons and cannot be picked up by the strip
+they sit in is half a title bar.
 
 Centring is done with a mirror of the caption buttons' width on the left edge
 rather than with a plain stretch. Without it the band's centre is pushed left
@@ -51,6 +56,7 @@ from bytesraw_erp.ui.theme import Palette
 from bytesraw_erp.ui.widgets.banner import Banner
 from bytesraw_erp.ui.widgets.sections import BrandHeader
 from bytesraw_erp.ui.widgets.window_controls import WindowControls
+from bytesraw_erp.ui.widgets.window_drag import enable_window_drag
 
 #: Content widths. A page picks the one that suits what it holds - a credential
 #: form has no business being 1000px wide - while the chrome around it stays
@@ -86,7 +92,6 @@ class PageShell(QWidget):
         subtitle: str = "",
         *,
         width: int = WIDTH_LIST,
-        windowed: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -101,7 +106,8 @@ class PageShell(QWidget):
         band_row.setContentsMargins(_BAND_GUTTER, 10, _BAND_GUTTER, 0)
         band_row.setSpacing(0)
 
-        self.window_controls = WindowControls(allow_full_screen=windowed)
+        self.window_controls = WindowControls()
+        enable_window_drag(band)
 
         # The left mirror: an empty widget as wide as the caption buttons, so
         # the two stretches either side of the column stay equal and the column

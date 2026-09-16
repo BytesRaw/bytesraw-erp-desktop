@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
 from bytesraw_erp.data import account_store as store_module
@@ -155,7 +155,11 @@ def test_the_full_screen_guard_does_not_resurrect_a_closing_window(
 def test_a_windowed_launch_is_never_forced_back_to_full_screen(
     context: AppContext, monkeypatch: pytest.MonkeyPatch, qtbot
 ) -> None:
-    """``--windowed`` hands the size back to the user; enforcement would take it."""
+    """``--windowed`` hands the size back to the user; enforcement would take it.
+
+    Nothing about the launch mode is read any more - the window simply never
+    went full screen, so nothing armed the correction.
+    """
     monkeypatch.setattr(QApplication, "quit", lambda _self: None)
     context.windowed = True
     widget = MainWindow(context)
@@ -166,6 +170,43 @@ def test_a_windowed_launch_is_never_forced_back_to_full_screen(
     widget._enforce_full_screen()
 
     assert not widget.isFullScreen()
+
+
+def test_leaving_full_screen_on_purpose_is_not_corrected(
+    context: AppContext, monkeypatch: pytest.MonkeyPatch, qtbot
+) -> None:
+    """The maximise button, the toggle and F11 all end in one of the show calls.
+
+    Before those calls recorded the intent, the correction had no way to tell
+    a deliberate departure from an accidental one and put every one of them
+    straight back - so on a till the new buttons would have done nothing at all.
+    """
+    monkeypatch.setattr(QApplication, "quit", lambda _self: None)
+    widget = MainWindow(context)
+    qtbot.addWidget(widget)
+    widget.showFullScreen()
+
+    widget.showMaximized()
+    widget._enforce_full_screen()
+
+    assert not widget.isFullScreen()
+
+
+def test_an_accidental_departure_still_is(
+    context: AppContext, monkeypatch: pytest.MonkeyPatch, qtbot
+) -> None:
+    """Alt+Tab, Qt or the shell dropping the flag is what this exists for."""
+    monkeypatch.setattr(QApplication, "quit", lambda _self: None)
+    widget = MainWindow(context)
+    qtbot.addWidget(widget)
+    widget.showFullScreen()
+
+    # Not through any of the show calls, which is exactly how it reaches the
+    # window when something else is the cause.
+    widget.setWindowState(Qt.WindowState.WindowNoState)
+    widget._enforce_full_screen()
+
+    assert widget.isFullScreen()
 
 
 # -- background work ---------------------------------------------------------

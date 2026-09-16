@@ -40,8 +40,9 @@ _APP_USER_MODEL_ID = "BytesRaw.BytesrawERP"
 
 #: Launch the shell in an ordinary resizable window instead of full screen.
 #: A till wants the full-screen default; a developer, and a back-office machine
-#: that also runs something else, want the desktop back. Only in this mode does
-#: the window carry a full-screen toggle - see
+#: that also runs something else, want the desktop back. It decides only where
+#: the window *starts*: the caption buttons carry a maximise/restore pair and a
+#: full-screen toggle in either mode - see
 #: :mod:`bytesraw_erp.ui.widgets.window_controls`.
 _WINDOWED_FLAGS = ("--windowed", "-w")
 
@@ -172,8 +173,8 @@ def run(argv: list[str] | None = None) -> int:
     if windowed:
         window.show()
     else:
-        # Full screen from the first paint - the window has no other size, and
-        # ``show()`` first would flash a framed window before it switched.
+        # Full screen from the first paint: ``show()`` first would flash a
+        # framed window at its restore size before it switched.
         window.showFullScreen()
     window.start()
     # After the window, deliberately: the first check is delayed anyway, and

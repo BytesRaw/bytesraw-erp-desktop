@@ -8,6 +8,7 @@ Neither raises - both just look wrong - so they are pinned here.
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QFrame, QLabel, QToolButton
 
@@ -100,14 +101,33 @@ def test_the_bar_says_nothing_about_the_company(bar: AppBar, session: SessionCon
 # -- the window controls -----------------------------------------------------
 
 
-def test_the_bar_carries_minimise_and_close(bar: AppBar) -> None:
-    """There is no title bar to carry them - the app runs full screen."""
+def test_the_bar_carries_the_whole_caption(bar: AppBar) -> None:
+    """There is no title bar to carry them - the app draws its own."""
     controls = bar.findChild(WindowControls)
     assert controls is not None
-    for name in ("MinimizeButton", "CloseButton"):
+    for name in ("MinimizeButton", "MaximizeButton", "FullScreenButton", "CloseButton"):
         button = controls.findChild(QToolButton, name)
         assert button is not None, f"no {name}"
         assert not button.icon().isNull()
+
+
+def test_the_bar_is_the_grip_as_well_as_the_buttons(bar: AppBar) -> None:
+    """Half a title bar is one you can see the buttons on but cannot pick up.
+
+    Pinned by the filter being installed rather than by synthesising a drag:
+    the move itself is ``startSystemMove``, which hands the window to the
+    window manager and cannot be observed from inside the process.
+    """
+    from bytesraw_erp.ui.widgets.window_drag import _WindowDragFilter
+
+    assert bar.findChildren(_WindowDragFilter), "the app bar is not draggable"
+
+
+def test_the_user_chip_keeps_its_own_presses(bar: AppBar) -> None:
+    """It opens its menu on the *release*, which a started drag would eat."""
+    chip = bar.findChild(QFrame, "UserChip")
+    assert chip is not None
+    assert chip.testAttribute(Qt.WidgetAttribute.WA_NoMousePropagation)
 
 
 def test_the_window_controls_follow_the_theme(bar: AppBar) -> None:

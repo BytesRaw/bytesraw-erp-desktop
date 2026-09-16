@@ -137,6 +137,16 @@ _PATHS: dict[str, str] = {
     ),
     "minimize": '<path d="M5 12h14"/>',
     "close": '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
+    # Maximise and restore, drawn as Windows draws them - a single pane, and
+    # a pane with the one it came from behind it - because unlike the pair
+    # below these mean exactly what the caption buttons of any other window
+    # mean, and a user reaches for them by shape.
+    "maximize": '<rect x="4.5" y="4.5" width="15" height="15" rx="2.5"/>',
+    "restore": (
+        '<path d="M8 8V6.5A2.5 2.5 0 0 1 10.5 4h7A2.5 2.5 0 0 1 20 6.5v7'
+        'A2.5 2.5 0 0 1 17.5 16H16"/>'
+        '<rect x="4" y="8" width="12" height="12" rx="2.5"/>'
+    ),
     # Corner brackets rather than the hollow square Windows uses for maximise:
     # this control enters *full screen*, which is not the same promise, and the
     # brackets are the convention for it everywhere a video player lives.

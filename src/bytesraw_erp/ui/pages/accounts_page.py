@@ -43,7 +43,6 @@ class AccountsPage(QWidget):
             "Accounts",
             "Open a saved Odoo connection, or change the ones on this computer.",
             width=WIDTH_LIST,
-            windowed=context.windowed,
         )
         self._banner = self._shell.banner
         outer = QVBoxLayout(self)

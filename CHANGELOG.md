@@ -22,9 +22,30 @@ workflow refuses to build a tag that disagrees with it.
   every screen, in the same corner the app bar puts them in.
 - **Two-column settings** on a wide screen, collapsing to one on a narrow one,
   so the whole page fits without scrolling.
+- **A maximise/restore button and a full-screen toggle** in the caption buttons,
+  on every screen. The window starts full screen as before, but it can now be
+  brought down to a maximised or a loose window and put back, from the app bar
+  or from any page's header.
+- **The app bar *is* the title bar.** The window has no frame of its own any
+  more, so restoring it down no longer reveals a second, native title bar under
+  the app bar with a duplicate set of buttons. Dragging the bar by its blank
+  space moves the window and double-clicking it maximises or restores - the
+  same on the header band of the account list, the account form and settings.
+  Aero Snap, shake-to-minimise and dragging a maximised window back down all
+  behave as they do on any other window, because the move is handed to Windows
+  rather than done by the app.
+- **Resizing from every edge and corner** of the restored window, through a
+  six-pixel border the window insets itself by. The border is only there while
+  the window is loose: maximised and full screen have no size to change, so it
+  goes and the app fills the screen exactly as before.
 
 ### Changed
 
+- The full-screen toggle is no longer limited to a `--windowed` launch, and the
+  window is no longer pinned to full screen. A window that drops out of full
+  screen by accident - Alt+Tab, the shell, Qt - is still put straight back; only
+  a deliberate press of one of the caption buttons, F11 or a double-click on the
+  app bar is left alone. A till nobody touches behaves exactly as before.
 - The account form's **Cancel** and **Connect and save** moved from below the
   last field into the header, where they stay in view on a short screen. Enter
   in the password field still submits.

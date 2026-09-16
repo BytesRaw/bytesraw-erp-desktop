@@ -35,12 +35,15 @@ directly, a click aimed at the icon was a sheet of paper. The saved mode still
 governs the prints Odoo starts by itself, and the bar names it rather than
 running it.
 
-The window controls
--------------------
-The app is full screen and has no title bar of its own, so minimise and close
-ride at the right-hand end of the bar - the corner they would have occupied
-anyway. A windowed launch adds a full-screen toggle between them; a full-screen
-one does not, because there is nothing to toggle.
+The window controls, and the bar as a title bar
+----------------------------------------------
+The app has no title bar of its own, so the caption buttons ride at the
+right-hand end of the bar - the corner they would have occupied anyway - and
+the bar takes on the rest of a caption's job as well: its blank space drags the
+window, and a double-click on it maximises or restores. See
+:mod:`.window_drag`. Only blank space and inert labels do that; every control
+in the bar consumes its own press, and the user chip - which opens its menu on
+*release* - is marked so that its presses never reach the bar at all.
 """
 
 from __future__ import annotations
@@ -64,6 +67,7 @@ from bytesraw_erp.data.models import PrintMode, SessionContext
 from bytesraw_erp.ui.theme import APP_BAR_HEIGHT, Palette, Theme
 from bytesraw_erp.ui.widgets.icons import icon, set_icon_color
 from bytesraw_erp.ui.widgets.window_controls import WindowControls
+from bytesraw_erp.ui.widgets.window_drag import enable_window_drag
 
 _BRAND_HEIGHT = 22
 _AVATAR = 30
@@ -86,6 +90,10 @@ class _ChipFrame(QFrame):
         super().__init__(parent)
         self.setObjectName(object_name)
         self._trigger: QToolButton | None = None
+        # The bar is draggable, and an ignored press travels up to it. This
+        # chip acts on the *release*, so a press that escaped could start a
+        # window move whose release the menu never sees.
+        self.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
 
     def set_trigger(self, button: QToolButton) -> None:
         self._trigger = button
@@ -115,12 +123,7 @@ class AppBar(QWidget):
     #: Open the settings page.
     settings_requested = Signal()
 
-    def __init__(
-        self,
-        parent: QWidget | None = None,
-        *,
-        allow_full_screen: bool = False,
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("AppBar")
         self.setFixedHeight(APP_BAR_HEIGHT)
@@ -148,8 +151,10 @@ class AppBar(QWidget):
         layout.addWidget(self._separator())
         self._build_identity_section(layout)
         layout.addWidget(self._separator())
-        self._window_controls = WindowControls(allow_full_screen=allow_full_screen)
+        self._window_controls = WindowControls()
         layout.addWidget(self._window_controls)
+
+        enable_window_drag(self)
 
         self.set_session(None)
 

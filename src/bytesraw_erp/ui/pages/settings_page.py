@@ -121,7 +121,6 @@ class SettingsPage(QWidget):
             "Settings",
             "Appearance, display, printing and updates, for this computer.",
             width=WIDTH_WIDE,
-            windowed=context.windowed,
         )
         self._banner = self._shell.banner
         outer = QVBoxLayout(self)
