@@ -244,7 +244,13 @@ jobs:
               sha256      = $sha
               size        = $installer.Length
               installer   = 'inno-setup'
-              silent_args = @('/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS')
+              # /RELAUNCH is the app's own switch, read by the installer's
+              # [Run] section: the Restart Manager restarts only a process
+              # that registered for it, which builds up to 0.2.0 did not, so
+              # without this an upgrade of one of those leaves the till with
+              # nothing running. Setup ignores a switch it does not recognise,
+              # so passing it to an older installer costs nothing.
+              silent_args = @('/SILENT', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS', '/RELAUNCH')
             }
           }
 

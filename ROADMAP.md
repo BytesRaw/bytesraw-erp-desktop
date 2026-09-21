@@ -213,11 +213,18 @@ The app survives the things a real deployment does to it.
         workflow so a release cannot ship without announcing itself
   - [x] **M7.3.3** In-app check on launch and every few hours, through
         `run_async`, announced by a toast. Installing runs
-        `setup.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`; the fixed
-        `AppId` and Inno's Restart Manager already make that an in-place
-        upgrade over a running till. Settings gained a card for the channel,
-        automatic checking and "check now"; the staged rollout is decided on
-        the client, so the update host needs no telemetry
+        `setup.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /RELAUNCH`;
+        the fixed `AppId` makes that an in-place upgrade over a running till.
+        Settings gained a card for the channel, automatic checking and "check
+        now"; the staged rollout is decided on the client, so the update host
+        needs no telemetry.
+        The two Restart Manager switches were taken on trust here and neither
+        worked: closing failed on the embedded browser's helper processes,
+        which the Restart Manager refuses to shut down gracefully, and
+        restarting was never possible because the app had not registered for
+        it. Fixed in v0.2.1 - `CloseApplications=force`,
+        `RegisterApplicationRestart`, and `/RELAUNCH` for the builds already in
+        the field
   - [ ] **M7.3.4** Unattended updates for tills, where nobody at the keyboard
         can answer a UAC prompt: a scheduled task installed by the `.iss`,
         running as SYSTEM in a maintenance window. The app returns at logon

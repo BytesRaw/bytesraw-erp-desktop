@@ -63,9 +63,19 @@ WizardStyle=modern
 Compression=lzma2/max
 SolidCompression=yes
 
-; Upgrading over a running till is the normal case, not the exception. The
-; Restart Manager asks the app to close rather than failing on a locked DLL.
-CloseApplications=yes
+; Upgrading over a running till is the normal case, not the exception, and
+; "force" rather than "yes" is what makes it work. Measured against an
+; installed 0.2.0 by driving the Restart Manager's own API: the shell is listed
+; as RmMainWindow and closes gracefully on its own, but every
+; QtWebEngineProcess.exe child is listed as RmUnknownApp - the class the
+; Restart Manager will not shut down gracefully at all - and one of those fails
+; the whole RmShutdown with ERROR_FAIL_SHUTDOWN (351), leaving the shell
+; running too. That is the "Setup was unable to automatically close all
+; applications" dialog, and it was on every upgrade. The same shutdown with the
+; force flag returns 0 and leaves nothing behind. Graceful is still tried
+; first, so the shell's own teardown still runs; only the children nothing can
+; ask are terminated, and they exit with their parent anyway.
+CloseApplications=force
 RestartApplications=no
 SetupMutex=BytesrawERPSetupMutex
 
@@ -98,8 +108,42 @@ Name: "{autostartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; An upgrade the app started for itself is silent, so the entry above is
+; skipped - and the Restart Manager cannot put the app back either: RmRestart
+; only restarts processes that called RegisterApplicationRestart, which no
+; build up to 0.2.0 did (measured: bRestartable=False). So the updater passes
+; /RELAUNCH and this entry does it, which is what keeps a till from being left
+; sitting on the desktop with nothing running. Newer builds also register
+; themselves, so both may fire; the single-instance guard folds the second
+; launch into the first.
+;
+; runasoriginaluser because Setup is elevated and the app must not be - it
+; would write its accounts, settings and web profiles as whoever answered the
+; UAC prompt rather than as the user at the till.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
 
 [Code]
+
+{ Whether the in-app updater asked for the app to be started again once Setup
+  is done. It passes /RELAUNCH, and nothing else does: a silent install run by
+  an administrator to image a machine should not start the app on it.
+
+  Read with ParamStr rather than with the param constant, because that one
+  only reads a parameter written as /NAME=VALUE and this is a bare switch,
+  like every other switch Setup itself takes. }
+function RelaunchRequested(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if Uppercase(ParamStr(I)) = '/RELAUNCH' then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
 { The app writes nothing beside its executable - core/paths.py puts everything
   under %APPDATA% and %LOCALAPPDATA% - so uninstalling the program directory
   leaves a user's accounts, web profiles and Chromium cache behind.

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import sys
 from dataclasses import dataclass
+from typing import Final
 
 from PySide6 import QtWebEngineWidgets  # noqa: F401  (import-order requirement)
 from PySide6.QtCore import QCoreApplication, Qt
@@ -29,6 +30,7 @@ from bytesraw_erp.data.models import RenderMode
 from bytesraw_erp.data.settings_store import SettingsStore
 from bytesraw_erp.services.graphics import configure_rendering
 from bytesraw_erp.services.single_instance import SingleInstanceGuard
+from bytesraw_erp.services.update_service import is_installed_build
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.main_window import MainWindow
 from bytesraw_erp.ui.theme import ThemeController
@@ -123,6 +125,50 @@ def _claim_windows_identity() -> None:
         _log.debug("Could not set the AppUserModelID: %s", exc)
 
 
+#: What Windows may restart this process for. Only the patch case is wanted -
+#: an installer replacing the files under a running till - so the crash, hang
+#: and reboot cases are all declined. ``RESTART_NO_PATCH`` is deliberately not
+#: among them: it is the one case this registration exists for.
+_RESTART_NO_CRASH: Final[int] = 1
+_RESTART_NO_HANG: Final[int] = 2
+_RESTART_NO_REBOOT: Final[int] = 8
+
+
+def _register_for_restart() -> None:
+    """Let an upgrade put the till back the way it found it.
+
+    ``/RESTARTAPPLICATIONS`` asks Inno to restart what it closed, and Inno asks
+    the Restart Manager, which restarts **only** the processes that registered
+    here. Measured against an installed 0.2.0 by driving the Restart Manager's
+    own API: this process is listed as ``RmMainWindow`` with
+    ``bRestartable=False``, so the switch was asking for something that could
+    never happen and an upgrade left the till showing the desktop.
+
+    ``None`` for the command line means "no arguments": Windows supplies the
+    executable path itself, and passing it again would arrive as ``argv[1]``.
+    Only for a frozen build, because restarting a source checkout would mean
+    relaunching ``python.exe`` with nothing to run. Cosmetic in the same sense
+    as :func:`_claim_windows_identity` - a failure here must never cost a
+    startup, and the installer's own ``/RELAUNCH`` entry covers the same
+    ground for builds that predate this.
+    """
+    if sys.platform != "win32" or not is_installed_build():
+        return
+    try:
+        import ctypes
+
+        result = int(
+            ctypes.windll.kernel32.RegisterApplicationRestart(
+                None, _RESTART_NO_CRASH | _RESTART_NO_HANG | _RESTART_NO_REBOOT
+            )
+        )
+    except (AttributeError, OSError) as exc:  # pragma: no cover - Windows detail
+        _log.debug("Could not register for restart after an upgrade: %s", exc)
+        return
+    if result != 0:  # pragma: no cover - Windows detail
+        _log.debug("Windows declined the restart registration (0x%08X)", result & 0xFFFFFFFF)
+
+
 def build_application(argv: list[str] | None = None) -> QApplication:
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     # Drives QStandardPaths, so this must happen before any path is resolved.
@@ -174,6 +220,10 @@ def run(argv: list[str] | None = None) -> int:
         APP_VERSION,
         "windowed" if windowed else "full screen",
     )
+
+    # After the guard, because the copy that loses the claim is about to exit
+    # and has nothing to be restarted for.
+    _register_for_restart()
 
     # The theme must be applied before any widget is built, so the first
     # paint is already correct rather than flashing light then re-styling.

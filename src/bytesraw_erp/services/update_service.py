@@ -29,12 +29,32 @@ rollout holds back is silently *not offered*, and a manual "check now" ignores
 the gate, because a user who asks the question deserves the true answer.
 
 **The installer closes the app, not the other way round.** ``setup.exe`` is run
-with ``/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`` and then simply left to
-it: Inno's Restart Manager asks the running app to close, replaces the files and
-starts it again. Quitting first looks tidier and is wrong - with nothing running
-there is nothing for ``/RESTARTAPPLICATIONS`` to restart, and the ``[Run]``
-entry that would otherwise relaunch it carries ``skipifsilent``, so the till
-would be left sitting on the desktop with no app at all.
+with the switches the manifest names - today ``/SILENT /CLOSEAPPLICATIONS
+/RESTARTAPPLICATIONS /RELAUNCH`` - and then simply left to it: Inno's Restart
+Manager asks the running app to close, replaces the files and starts it again.
+Quitting first looks tidier and is wrong - with nothing running there is
+nothing for ``/RESTARTAPPLICATIONS`` to restart, and the ``[Run]`` entry that
+would otherwise relaunch it carries ``skipifsilent``, so the till would be left
+sitting on the desktop with no app at all.
+
+Neither half of that worked until 0.2.1, and both failures were in the
+installer rather than here - see ``packaging/bytesraw-erp.iss`` and
+``app._register_for_restart`` for what was measured. In short: ``/CLOSEAPPLICATIONS``
+could not close an app whose QtWebEngine children the Restart Manager declines
+to shut down gracefully, so every upgrade stopped on "Setup was unable to
+automatically close all applications"; and ``/RESTARTAPPLICATIONS`` restarts
+only a process that registered for it, which no build up to 0.2.0 did.
+``/RELAUNCH`` is this app's own switch, read by the installer's ``[Run]``
+section, and it is why the fix reaches tills already running 0.2.0: the
+switches come from the manifest, so an installed build needs no new code to
+start passing it.
+
+That switch does not make quitting here reasonable, tempting as it now looks.
+An installer that is never going to run - a declined UAC prompt, a machine
+below ``MinVersion``, a second ``setup.exe`` already holding the mutex - has
+still not closed anything, and the app is still up to carry on or to say why.
+Closing is the installer's to do because only the installer knows it got that
+far.
 """
 
 from __future__ import annotations
