@@ -2,24 +2,25 @@
   "schema": 1,
   "product": "bytesraw-erp",
   "channel": "stable",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "released": "2026-09-21",
   "minimum_supported": "0.1.0",
   "mandatory": false,
   "rollout": 100,
   "signed": false,
-  "notes_url": "https://github.com/BytesRaw/bytesraw-erp-desktop/releases/tag/v0.2.0",
+  "notes_url": "https://github.com/BytesRaw/bytesraw-erp-desktop/releases/tag/v0.2.1",
   "next_manifest_url": null,
   "artifact": {
-    "url": "https://github.com/BytesRaw/bytesraw-erp-desktop/releases/download/v0.2.0/BytesrawERP-0.2.0-setup.exe",
-    "filename": "BytesrawERP-0.2.0-setup.exe",
-    "sha256": "925bb7e00676164e6bf001d20290bfbbba62592413c0457ff87a0c00f0c070c9",
-    "size": 146023697,
+    "url": "https://github.com/BytesRaw/bytesraw-erp-desktop/releases/download/v0.2.1/BytesrawERP-0.2.1-setup.exe",
+    "filename": "BytesrawERP-0.2.1-setup.exe",
+    "sha256": "207ce4b2690311c8657b43a024a303543cef8595632df8ba36afc4d2de08401d",
+    "size": 146020555,
     "installer": "inno-setup",
     "silent_args": [
       "/SILENT",
       "/CLOSEAPPLICATIONS",
-      "/RESTARTAPPLICATIONS"
+      "/RESTARTAPPLICATIONS",
+      "/RELAUNCH"
     ]
   }
 }
