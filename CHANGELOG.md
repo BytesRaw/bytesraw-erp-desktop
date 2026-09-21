@@ -45,6 +45,10 @@ workflow refuses to build a tag that disagrees with it.
   are both ordinary, and neither should have its documents sent to whatever
   device Windows happens to name. A report that is not printed is still saved
   in Downloads and named in a notification, so it cannot go missing.
+- **Clicking the desktop icon again brings the open window forward** instead of
+  starting a second copy of the application. Only one Bytesraw ERP runs per
+  signed-in user; a later launch raises the window that is already there, even
+  from full screen or the taskbar, and exits.
 
 ### Changed
 
@@ -71,6 +75,29 @@ workflow refuses to build a tag that disagrees with it.
   The allowance is restored as soon as a keepalive probe confirms the
   replacement session is live, so a server that refuses the fresh session
   straight away is still stopped after one attempt.
+- **A renewed session is now actually used by the embedded client.** After the
+  first time a session expired, every later re-authentication signed in
+  correctly and was then ignored: the app's cookie was stored alongside the
+  dead one Odoo had left behind rather than replacing it, and the browser kept
+  sending the dead one. The visible symptom was a loop of "The Odoo session
+  keeps expiring" that only a reinstall cleared. Existing profiles are repaired
+  on the next sign-in; nothing needs to be cleared by hand.
+- **A session revoked on the server is renewed straight away.** Signing a user
+  out from Odoo's backend left the embedded client showing "Your Odoo session
+  expired" with nothing behind it: Odoo reports that in a dialog that waits for
+  a click rather than by navigating anywhere, so the app did not notice until
+  its five-minute keepalive came round. The app now reads the expiry out of
+  Odoo's own call as it happens and signs back in immediately, onto the page
+  the user was on.
+- The one silent re-authentication allowed per expiry is now restored by an
+  Odoo page that finishes loading as well as by a keepalive probe, so a session
+  that expires twice inside five minutes is recovered twice rather than being
+  met with "The Odoo session keeps expiring".
+- **A renewal the server refuses no longer deletes the account.** When the
+  saved password has stopped being accepted - changed by an administrator, or
+  the user archived - the app says so and points at "Manage accounts" instead
+  of removing the account and its stored password behind the user's back. An
+  account is still removed when a sign-in the *user* asked for is rejected.
 
 ## [0.1.10] - 2026-09-13
 

@@ -185,6 +185,34 @@ class MainWindow(QMainWindow):
             has_accounts = False
         self.router.reset_to(ROUTE_ODOO if has_accounts else ROUTE_ACCOUNT_NEW)
 
+    def present(self) -> None:
+        """Bring this window forward, without changing what size it should be.
+
+        What a second launch of the application reaches: the desktop icon was
+        clicked again, so the user wants to *see* the app, not to start another
+        copy of it. See
+        :mod:`bytesraw_erp.services.single_instance` for how the launch that
+        exits hands its foreground right over first - without that, Windows
+        refuses ``SetForegroundWindow`` to a process it is not currently
+        interacting with and this does no more than flash the taskbar button.
+
+        ``showNormal()`` is deliberately not used to un-minimise: it is one of
+        the three calls that record the user's *intent* about the window size,
+        so restoring a till this way would quietly take it out of full screen
+        for the rest of the session. Clearing the minimised bit leaves every
+        other state bit - full screen, maximised - exactly as it was found.
+        """
+        if self._closing:
+            return
+        _log.info("Another launch asked for this window; bringing it forward")
+        if self._full_screen_intended:
+            self.showFullScreen()
+        else:
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
     def _on_theme_changed(self, palette: Palette) -> None:
         set_icon_color(palette.text)
         self._overlay_controls.apply_theme(palette)

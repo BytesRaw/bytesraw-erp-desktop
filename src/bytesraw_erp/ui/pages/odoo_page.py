@@ -16,12 +16,18 @@ either one can be the first to notice:
 * an **RPC call** comes back with ``odoo.http.SessionExpiredException``, which
   :class:`~bytesraw_erp.services.odoo_client.OdooClient` raises as
   :class:`OdooSessionExpired`;
+* **Odoo's own client** reports the fault, which is what happens when a
+  session is revoked while someone is working: the failure is an XHR inside the
+  single-page client, so nothing navigates, and Odoo answers it with a modal
+  that waits for a click. The script in
+  :mod:`bytesraw_erp.ui.widgets.web_view` reads it out of the response and
+  raises :meth:`OdooPage._on_web_session_expired`;
 * nothing at all happens, because the till has been idle. A probe every
   ``SESSION_PROBE_SECONDS`` covers that case and, since Odoo's
   ``get_session_info`` calls ``session.touch()``, doubles as the keepalive that
   stops the session expiring in the first place.
 
-All three funnel into :meth:`OdooPage._recover_session`, which signs in again
+All four funnel into :meth:`OdooPage._recover_session`, which signs in again
 with the password already in the vault and puts the user back on the page they
 were on. Nothing is asked of them: the credentials have not changed, only the
 server's memory of the session has. The one thing that must not happen is a
@@ -33,9 +39,18 @@ difference is the whole point of the allowance. A session that expires, is
 recovered, and then expires again hours later at the end of its ordinary life
 is not a loop - it is the mechanism working twice - and a latch that stayed
 down would have made every till stop recovering after its first expiry of the
-day. The first probe to come back healthy is what puts the allowance back: it
-is proof that the replacement session is a real one and not another redirect to
-the login page, which is the only case the latch exists to stop.
+day. Proof of life is what puts the allowance back - an Odoo page that finishes
+loading somewhere other than the login screen, or the first probe to come back
+healthy - because that is the server saying the replacement session is a real
+one and not another redirect to the login page, which is the only case the latch
+exists to stop.
+
+What the renewal must never do is delete the account. An interactive sign-in the
+server rejects does, and should: the user is at the screen and the form carries
+their details back to them. A silent renewal is the opposite situation - nobody
+asked, and the details that worked this morning were changed by somebody else -
+so :meth:`OdooPage._on_recovery_failed` reports it and leaves the account and
+its vault entry alone.
 """
 
 from __future__ import annotations
@@ -135,7 +150,7 @@ class OdooPage(QWidget):
         self._router = router
         self._web: OdooWebView | None = None
         self._web_account_id: str | None = None
-        #: True while a silent re-authentication is running, so the three
+        #: True while a silent re-authentication is running, so the four
         #: detectors cannot each start one for the same expiry.
         self._recovering = False
         #: The last Odoo path the user was actually on. Tracked here rather
@@ -145,10 +160,11 @@ class OdooPage(QWidget):
         self._last_path: str | None = None
         #: Where to return once the session is back.
         self._resume_path: str | None = None
-        #: One silent retry per expiry, put back by the first probe the
-        #: recovered session answers. A server that bounces the replacement
-        #: straight back is not going to be fixed by a third attempt; a session
-        #: that lived for hours and then expired again is not that server.
+        #: One silent retry per expiry, put back by the first proof that the
+        #: recovered session works - a page that loads, or a probe that is
+        #: answered. A server that bounces the replacement straight back is not
+        #: going to be fixed by a third attempt; a session that lived for hours
+        #: and then expired again is not that server.
         self._recovery_spent = False
         #: The download toast, kept so its text can be rewritten as the
         #: transfer proceeds instead of stacking one toast per percent.
@@ -347,6 +363,18 @@ class OdooPage(QWidget):
 
         run_async(probe_session, client, on_success=answered, on_error=failed)
 
+    def _on_web_session_expired(self) -> None:
+        """The embedded client's own RPC call came back with the fault.
+
+        The fourth detector, and the only one that fires while the user is
+        actually looking at the problem. Odoo's client does not navigate on an
+        expired session - it shows a modal and waits for a click - so without
+        this the shell learns nothing until the probe comes round, up to
+        ``SESSION_PROBE_SECONDS`` later. The reload at the end of recovery
+        disposes of Odoo's dialog on the way past.
+        """
+        self._recover_session("Odoo's web client reported the session as expired.")
+
     def _on_session_expired(self, exc: Exception) -> bool:
         """Route an expired-session fault from an RPC call into recovery.
 
@@ -375,7 +403,9 @@ class OdooPage(QWidget):
             # Straight after a recovery, before a single probe has come back
             # healthy - so the replacement session was refused as fast as it
             # was issued, and a third sign-in would only be the start of a loop.
-            _log.warning("Session expired again straight after a recovery; giving up")
+            _log.warning(
+                "Session expired again straight after a recovery; giving up: %s", reason
+            )
             self._show_error(
                 "The Odoo session keeps expiring. Sign in again from "
                 "'Manage accounts', or check the server's session settings."
@@ -411,9 +441,38 @@ class OdooPage(QWidget):
 
         def failed(exc: Exception) -> None:
             self._recovering = False
-            self._on_auth_failed(exc)
+            self._on_recovery_failed(exc)
 
         run_async(open_session, account, password, on_success=done, on_error=failed)
+
+    def _on_recovery_failed(self, exc: Exception) -> None:
+        """Report a silent re-authentication the server refused.
+
+        Deliberately **not** :meth:`_on_auth_failed`. That branch deletes an
+        account the server rejects, which is the right answer when the user
+        has just typed details that cannot work - they are still on screen,
+        they know what they entered, and the form is carrying it back to them.
+
+        Here nobody asked for anything. Somebody was working, the session went,
+        and details that were correct minutes ago are not any more: an
+        administrator changed the password, archived the user, or revoked their
+        access. Deleting the account and emptying its vault entry on that would
+        destroy a working till configuration behind the user's back, over a
+        change they may not even have been told about. So the account stays
+        exactly as it is and the message says where to go and fix it.
+        """
+        _log.warning("Could not renew the Odoo session: %s", exc)
+        if isinstance(exc, OdooCredentialsRejected):
+            self._show_error(
+                f"{exc}\n\nThe Odoo session expired and the saved password is no "
+                "longer accepted. Choose 'Manage accounts' from the menu to sign "
+                "in again or update the account."
+            )
+            return
+        self._show_error(
+            f"{exc}\n\nThe Odoo session expired and could not be renewed. "
+            "Choose 'Manage accounts' from the menu to sign in again."
+        )
 
     def _resume(self) -> None:
         """Put the web view back where the user was, on the new session."""
@@ -449,6 +508,8 @@ class OdooPage(QWidget):
         web.path_changed.connect(self._on_path_changed)
         web.loading_changed.connect(self._on_loading_changed)
         web.print_requested.connect(self._on_page_print_requested)
+        web.session_expired.connect(self._on_web_session_expired)
+        web.page_loaded.connect(self._on_page_loaded)
         self._stack.addWidget(web)
         self._web = web
         self._web_account_id = account.id
@@ -486,6 +547,25 @@ class OdooPage(QWidget):
             self._context.store.remember_path(account.id, path)
         except BytesrawError as exc:
             _log.warning("Could not remember the last path: %s", exc)
+
+    def _on_page_loaded(self, path: str) -> None:
+        """An Odoo page finished loading, so restore the one silent retry.
+
+        The server answered a real navigation with a real page instead of
+        bouncing it to the login screen, which is the same proof of life a
+        successful probe carries - and it arrives seconds after a recovery
+        rather than up to ``SESSION_PROBE_SECONDS`` later. Without it the
+        allowance stays spent for the whole probe interval, so a second expiry
+        inside that window is met with "the session keeps expiring" although
+        the first recovery plainly worked.
+
+        It has to be the *finished* load rather than ``path_changed``: that one
+        fires the moment a navigation is requested, so it would clear the latch
+        on the very navigation a dead session is about to have redirected.
+        """
+        if path.startswith(ODOO_LOGIN_PATH):
+            return
+        self._recovery_spent = False
 
     def _on_loading_changed(self, loading: bool) -> None:
         self._progress.setVisible(loading)

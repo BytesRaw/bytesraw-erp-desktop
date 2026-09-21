@@ -28,6 +28,7 @@ from bytesraw_erp.core.resources import app_icon
 from bytesraw_erp.data.models import RenderMode
 from bytesraw_erp.data.settings_store import SettingsStore
 from bytesraw_erp.services.graphics import configure_rendering
+from bytesraw_erp.services.single_instance import SingleInstanceGuard
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.main_window import MainWindow
 from bytesraw_erp.ui.theme import ThemeController
@@ -156,6 +157,17 @@ def run(argv: list[str] | None = None) -> int:
     configure_rendering(options.render_mode or settings.display.render_mode)
 
     app = build_application(options.argv)
+
+    # Before anything with state behind it - a second copy would open the same
+    # account profiles over the same on-disk storage. Claimed after the
+    # QApplication because the pipe needs its event dispatcher, and before the
+    # context because the context is the first thing that touches those
+    # directories.
+    guard = SingleInstanceGuard(app)
+    if not guard.claim():
+        _log.info("%s is already running; asked the running copy to come forward", APP_NAME)
+        return 0
+
     _log.info(
         "Starting %s %s (%s)",
         APP_NAME,
@@ -170,6 +182,9 @@ def run(argv: list[str] | None = None) -> int:
 
     context = AppContext(theme, app, windowed=windowed, settings=settings)
     window = MainWindow(context)
+    # A later launch is a request to see the window that already exists, not
+    # to start another one.
+    guard.activation_requested.connect(window.present)
     if windowed:
         window.show()
     else:
@@ -183,4 +198,5 @@ def run(argv: list[str] | None = None) -> int:
     context.updates.start()
 
     app.aboutToQuit.connect(context.shutdown)
+    app.aboutToQuit.connect(guard.close)
     return app.exec()

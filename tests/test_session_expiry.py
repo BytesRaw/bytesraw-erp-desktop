@@ -433,3 +433,103 @@ def test_an_expiry_the_probe_never_vouched_for_still_gives_up(
 
     assert len(signed_in) == 1
     assert "keeps expiring" in widget._status_banner.text()
+
+
+def test_the_web_clients_own_report_is_a_detector(
+    page: tuple[OdooPage, _FakeRouter],
+    context: AppContext,
+    signed_in: list[tuple[str, str]],
+) -> None:
+    """The case none of the other three see.
+
+    A session revoked while someone is working fails an RPC call *Odoo's own
+    client* made, and Odoo answers that with a modal dialog and no navigation
+    at all - so the login-page detector never fires and the probe is up to five
+    minutes away. The script injected into the page reports it instead.
+    """
+    _save(context)
+    widget = page[0]
+    widget._on_path_changed("/odoo/sales/12")
+
+    widget._on_web_session_expired()
+
+    assert signed_in == [("admin", "secret")], "signed back in, unprompted"
+    assert widget._last_path == "/odoo/sales/12"
+
+
+def test_a_page_that_actually_loads_restores_the_one_allowed_retry(
+    page: tuple[OdooPage, _FakeRouter],
+    context: AppContext,
+    signed_in: list[tuple[str, str]],
+) -> None:
+    """The server answered a navigation with a page, so the session works.
+
+    Same proof of life a successful probe carries, and it arrives seconds after
+    a recovery instead of up to ``SESSION_PROBE_SECONDS`` later. Without it a
+    till that expires twice inside one probe interval is told its session keeps
+    expiring, although the first recovery plainly worked.
+    """
+    _save(context)
+    widget = page[0]
+
+    widget._on_path_changed("/web/login")
+    assert len(signed_in) == 1
+
+    widget._on_page_loaded("/odoo/sales/12")
+    widget._on_web_session_expired()
+
+    assert len(signed_in) == 2, "a second expiry is recovered from too"
+
+
+def test_the_login_page_loading_is_not_proof_of_anything(
+    page: tuple[OdooPage, _FakeRouter],
+    context: AppContext,
+    signed_in: list[tuple[str, str]],
+) -> None:
+    """It is the *failure* the latch exists to stop, arriving with ``ok=True``.
+
+    Chromium reports a redirect to the login screen as a load that succeeded,
+    so the allowance has to be restored by where the navigation landed rather
+    than by whether it landed anywhere.
+    """
+    _save(context)
+    widget = page[0]
+
+    widget._on_path_changed("/web/login")
+    widget._on_page_loaded("/web/login?redirect=%2Fodoo")
+    widget._on_web_session_expired()
+
+    assert len(signed_in) == 1
+    assert "keeps expiring" in widget._status_banner.text()
+
+
+def test_a_refused_renewal_keeps_the_account_and_says_where_to_fix_it(
+    page: tuple[OdooPage, _FakeRouter],
+    context: AppContext,
+    fake_vault: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nobody asked for this sign-in, so nobody asked for the account's deletion.
+
+    An interactive sign-in the server rejects deletes the account: the user is
+    at the screen, they know what they typed, and the form carries it back. A
+    *silent* renewal is not that. The password the till has had for months
+    stopped being accepted - an administrator changed it, or archived the user
+    - and throwing the account and its vault entry away over that destroys a
+    working configuration behind the back of someone who may not be there.
+    """
+    from bytesraw_erp.core.errors import OdooCredentialsRejected
+
+    account = _save(context)
+
+    def rejected(_account: Account, _password: str) -> None:
+        raise OdooCredentialsRejected("Access Denied")
+
+    monkeypatch.setattr(odoo_page_module, "open_session", rejected)
+    widget = page[0]
+
+    widget._on_web_session_expired()
+
+    assert context.store.get(account.id) is not None, "the account survives"
+    assert fake_vault, "and so does its password"
+    assert "Manage accounts" in widget._status_banner.text()

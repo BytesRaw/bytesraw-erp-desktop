@@ -37,7 +37,15 @@ class _FakeRouter:
         return False
 
 
-def _update(version: str = "0.2.0", **overrides: object) -> Update:
+#: A version no build will ever carry, standing in for "newer than this one".
+#: Spelling a real number here ties the file to whatever ``APP_VERSION`` happens
+#: to be: the bump to 0.2.0 turned "0.2.0" from an offered upgrade into the
+#: running build, and `test_a_required_update_says_so` started asserting that an
+#: update to the version already installed was required.
+_NEWER = "99.0.0"
+
+
+def _update(version: str = _NEWER, **overrides: object) -> Update:
     fields: dict[str, object] = {
         "version": version,
         "channel": UpdateChannel.STABLE,
@@ -84,13 +92,13 @@ def test_an_available_update_is_offered_with_its_size(page: OdooPage, context: A
 
     shown = _messages(page)
     assert len(shown) == 1
-    assert "0.2.0" in shown[0]
+    assert _NEWER in shown[0]
     assert "139 MB" in shown[0]
 
 
 def test_a_required_update_says_so(page: OdooPage, context: AppContext) -> None:
     """It is still the user's click - a till mid-sale is not interrupted."""
-    context.updates.update_available.emit(_update(minimum_supported="0.2.0"))
+    context.updates.update_available.emit(_update(minimum_supported=_NEWER))
     assert "required" in _messages(page)[0]
 
 

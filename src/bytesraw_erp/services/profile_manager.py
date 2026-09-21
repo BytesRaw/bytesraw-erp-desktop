@@ -21,7 +21,11 @@ from urllib.parse import urlparse
 
 from PySide6.QtCore import QObject, QUrl, Signal
 from PySide6.QtNetwork import QNetworkCookie
-from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEngineProfile
+from PySide6.QtWebEngineCore import (
+    QWebEngineCookieStore,
+    QWebEngineDownloadRequest,
+    QWebEngineProfile,
+)
 
 from bytesraw_erp.constants import (
     APP_VERSION,
@@ -197,22 +201,22 @@ class ProfileManager(QObject):
         The whole jar is transplanted, not just ``session_id``: a deployment
         behind a load balancer also sets a sticky routing cookie, and dropping
         it can send the browser to a backend that has never seen the session.
+
+        **Host-only, exactly as the server writes them.** See
+        :meth:`_write_cookie` - writing a *domain* cookie instead does not
+        replace the server's, it shadows it, and the stale one wins.
         """
         origin = QUrl(account.url)
         host = urlparse(account.url).hostname or ""
-        secure = origin.scheme() == "https"
         store = self.profile_for(account).cookieStore()
 
         for name, value in cookies.items():
-            cookie = QNetworkCookie(name.encode(), value.encode())
-            cookie.setDomain(host)
-            cookie.setPath("/")
+            self._forget_domain_cookie(store, origin, host, name)
             # Only Odoo's own session cookie is HttpOnly; marking a routing
             # cookie HttpOnly would not match what the server set.
-            cookie.setHttpOnly(name == SESSION_COOKIE)
-            cookie.setSecure(secure)
-            cookie.setSameSitePolicy(QNetworkCookie.SameSite.Lax)
-            store.setCookie(cookie, origin)
+            self._write_cookie(
+                store, origin, name, value, http_only=name == SESSION_COOKIE
+            )
 
         _log.info(
             "Injected %d session cookie(s) for account %s: %s",
@@ -220,6 +224,80 @@ class ProfileManager(QObject):
             account.id,
             ", ".join(sorted(cookies)),
         )
+
+    @staticmethod
+    def _write_cookie(
+        store: QWebEngineCookieStore,
+        origin: QUrl,
+        name: str,
+        value: str,
+        *,
+        http_only: bool = False,
+    ) -> None:
+        """Write one cookie the way the server would write it: **host-only**.
+
+        The absent ``setDomain`` call is the whole point of this method, and it
+        is not a tidy-up. A ``QNetworkCookie`` with a domain set is stored by
+        Chromium as ``.example.com`` - a *domain* cookie - while Odoo's own
+        ``Set-Cookie`` carries no ``Domain`` attribute and is stored as
+        ``example.com``, host-only. Those are two different cookies under RFC
+        6265, so they **coexist**: measured, setting one never removes the
+        other, and the jar ends up holding two ``session_id`` entries for one
+        site.
+
+        Chromium then sends both, ordered by path length and then by creation
+        time, and werkzeug's ``request.cookies.get('session_id')`` - which is
+        what ``odoo/http.py:1486`` calls - takes the first. So whichever cookie
+        was created *earlier* decides the session, whatever the other says.
+
+        That is a bug with a fuse in it. A fresh profile holds no server
+        cookie, so injection works and the first sign-in succeeds. But Odoo
+        plants a host-only ``session_id`` of its own the first time a session
+        expires - ``handle_error`` rotates the session and sets the cookie - and
+        from that moment the server's dead cookie is the *older* of the two, so
+        every re-authentication afterwards injected a perfectly good session
+        that was never sent. Measured in a real profile::
+
+            created=2026-09-21 06:34:00  host=demo.fatoora.cloud   session_id
+            created=2026-09-21 07:25:09  host=.demo.fatoora.cloud  session_id
+
+        with the app logging a successful sign-in and then a redirect to
+        ``/web/login`` 280ms later, over and over. Writing host-only makes an
+        injection *replace* the server's entry, because it is the same cookie.
+
+        Do not "fix" this by naming the domain explicitly, and do not test it
+        against ``127.0.0.1``: a ``Domain`` attribute on an IP literal cannot
+        create a domain cookie, so the two forms collapse into one there and
+        the bug disappears.
+        """
+        cookie = QNetworkCookie(name.encode(), value.encode())
+        cookie.setPath("/")
+        cookie.setHttpOnly(http_only)
+        cookie.setSecure(origin.scheme() == "https")
+        cookie.setSameSitePolicy(QNetworkCookie.SameSite.Lax)
+        store.setCookie(cookie, origin)
+
+    @staticmethod
+    def _forget_domain_cookie(
+        store: QWebEngineCookieStore, origin: QUrl, host: str, name: str
+    ) -> None:
+        """Retire the domain-scoped twin an earlier build of this app planted.
+
+        Without this an upgrade fixes nothing: the shadowing pair is already in
+        the user's profile, and writing the host-only half leaves the other one
+        sitting beside it. Deliberately deletes only the *domain* form - the
+        host-only entry is the one the write above replaces, and a delete
+        racing that write could take the new session with it.
+
+        It would also remove a domain cookie a load balancer set on purpose,
+        for sharing across subdomains. That costs nothing here: the shell talks
+        to exactly one host, so a host-only cookie reaches every request it
+        makes, and the alternative is the shadowing this exists to end.
+        """
+        stale = QNetworkCookie(name.encode(), b"")
+        stale.setDomain(host)
+        stale.setPath("/")
+        store.deleteCookie(stale, origin)
 
     def set_color_scheme(self, account: Account, dark: bool) -> None:
         """Tell Odoo which colour scheme to render.
@@ -234,12 +312,13 @@ class ProfileManager(QObject):
 
     def _set_cookie(self, account: Account, name: str, value: str) -> None:
         origin = QUrl(account.url)
-        cookie = QNetworkCookie(name.encode(), value.encode())
-        cookie.setDomain(urlparse(account.url).hostname or "")
-        cookie.setPath("/")
-        cookie.setSecure(origin.scheme() == "https")
-        cookie.setSameSitePolicy(QNetworkCookie.SameSite.Lax)
-        self.profile_for(account).cookieStore().setCookie(cookie, origin)
+        host = urlparse(account.url).hostname or ""
+        store = self.profile_for(account).cookieStore()
+        # Host-only, and the domain twin dropped, for the same reason
+        # `inject_session` does it: Odoo reads `color_scheme` client-side too,
+        # and a shadowed one leaves the web client rendering the other theme.
+        self._forget_domain_cookie(store, origin, host, name)
+        self._write_cookie(store, origin, name, value)
 
     def clear_session(self, account: Account) -> None:
         """Delete every cookie for the account, e.g. on explicit sign-out."""

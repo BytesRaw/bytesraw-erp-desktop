@@ -116,11 +116,19 @@ Delivered after v0.1.0 on direct request.
 
 The app survives the things a real deployment does to it.
 
-- [x] **M2.1** Session expiry detection and silent re-authentication. Three
+- [x] **M2.1** Session expiry detection and silent re-authentication. Four
       detectors - the web view redirected to `/web/login`, an RPC fault of
-      `odoo.http.SessionExpiredException`, and a five-minute probe that doubles
-      as a keepalive - all recover by signing in again with the password
-      already in the vault, once per expiry, landing back on the same page
+      `odoo.http.SessionExpiredException`, that same fault read out of the
+      embedded client's own calls (Odoo answers one with a modal that waits for
+      a click, so nothing navigates and nothing else sees it), and a five-minute
+      probe that doubles as a keepalive - all recover by signing in again with
+      the password already in the vault, once per expiry, landing back on the
+      same page. The injected cookie is host-only, so it replaces the one Odoo
+      left behind instead of being shadowed by it
+- [x] **M2.10** One running copy per signed-in user. A second launch hands its
+      foreground right to the copy that is already running, asks it to come
+      forward, and exits before it has opened a second Chromium over the same
+      account profiles
 - [x] **M2.9** Software-rendering fallback for a broken graphics driver. A till
       with Intel HD Graphics (Bay Trail) on Windows 10 painted the web view as
       vertical stripes under a perfectly correct app bar; Settings -> Display

@@ -9,7 +9,10 @@ shell needs and a bare browser view does not:
   is the only supported way to reach an on-premise server with a self-signed
   certificate;
 * the current Odoo path is published as a signal so it can be remembered and
-  restored on the next launch.
+  restored on the next launch;
+* an Odoo session that dies underneath the running web client is reported to
+  the shell straight away, rather than being left in the modal dialog Odoo
+  puts it in - see :data:`_SESSION_EXPIRY_SCRIPT`.
 """
 
 from __future__ import annotations
@@ -23,27 +26,112 @@ from PySide6.QtWebEngineCore import (
     QWebEngineNewWindowRequest,
     QWebEnginePage,
     QWebEngineProfile,
+    QWebEngineScript,
     QWebEngineSettings,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget
 
+from bytesraw_erp.constants import SESSION_EXPIRED_NAME
 from bytesraw_erp.data.models import Account
 from bytesraw_erp.services.profile_manager import is_attachment_download_url
 
 _log = logging.getLogger(__name__)
+
+#: What the injected script writes to the console when it sees the fault, and
+#: what :meth:`OdooWebPage.javaScriptConsoleMessage` watches for. The console
+#: is the channel because it is the one QtWebEngine already hands to the page
+#: object; a ``QWebChannel`` would mean injecting Qt's own transport script
+#: into Odoo's page for a single one-way notification.
+SESSION_EXPIRED_MARKER = "__bytesraw_session_expired__"
+
+#: Ceiling on the response body the script will search. A JSON-RPC fault is a
+#: few hundred bytes even with a traceback in it; an ordinary Odoo response is
+#: routinely megabytes and can never contain the marker, so scanning one is
+#: pure cost.
+_MAX_SCANNED_RESPONSE = 1 << 20
+
+
+#: Tell the shell when Odoo's *own* client loses the session.
+#:
+#: This is the detector that matters for a session revoked on the server while
+#: someone is working, and none of the shell's other three see it. Odoo's web
+#: client catches ``odoo.http.SessionExpiredException`` from its own RPC calls
+#: and hands it to ``SessionExpiredDialog``
+#: (``addons/web/static/src/core/errors/error_dialogs.js:218``), which shows
+#: "Your Odoo session expired. The current page is about to be refreshed." and
+#: then *waits for a click* before reloading. So:
+#:
+#: * the web view never navigates to ``/web/login``, because the failure is an
+#:   XHR inside the single-page client rather than a navigation;
+#: * the shell's own RPC probe is up to ``SESSION_PROBE_SECONDS`` away.
+#:
+#: The user is therefore looking at a dead client and a modal, with the shell
+#: entirely unaware, for up to five minutes. Reading the fault out of the
+#: response as it arrives closes that gap to nothing, and the reload that
+#: recovery performs takes Odoo's dialog with it.
+#:
+#: Odoo's RPC goes through ``browser.XMLHttpRequest``
+#: (``addons/web/static/src/core/network/rpc.js``), so patching the prototype
+#: at document creation - before a line of Odoo's own JS has run - catches
+#: every call, including the ones POS makes. ``data.name`` is the only
+#: untranslated part of the fault, which is why it is what the search is for.
+_SESSION_EXPIRY_SCRIPT = f"""
+(function () {{
+    var send = XMLHttpRequest.prototype.send;
+    if (!send || send.__bytesraw) {{ return; }}
+    function inspect(xhr) {{
+        try {{
+            if (xhr.status !== 200) {{ return; }}
+            if (xhr.responseType !== "" && xhr.responseType !== "text") {{ return; }}
+            var body = xhr.responseText;
+            if (!body || body.length > {_MAX_SCANNED_RESPONSE}) {{ return; }}
+            if (body.indexOf("{SESSION_EXPIRED_NAME}") === -1) {{ return; }}
+            console.info("{SESSION_EXPIRED_MARKER}");
+        }} catch (ignored) {{
+            /* a response this frame is not allowed to read is not Odoo's */
+        }}
+    }}
+    function patched() {{
+        try {{
+            this.addEventListener("load", function () {{ inspect(this); }});
+        }} catch (ignored) {{ /* nothing to lose; the call still goes out */ }}
+        return send.apply(this, arguments);
+    }}
+    patched.__bytesraw = true;
+    XMLHttpRequest.prototype.send = patched;
+}})();
+"""
+
+
+def _session_expiry_script() -> QWebEngineScript:
+    script = QWebEngineScript()
+    script.setName("bytesraw-session-expiry")
+    script.setSourceCode(_SESSION_EXPIRY_SCRIPT)
+    # Before the document exists, so Odoo's modules find the patched prototype
+    # rather than racing it.
+    script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+    # The main world, necessarily: an isolated world has its own
+    # ``XMLHttpRequest`` and patching that one would tell us nothing about
+    # Odoo's.
+    script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+    script.setRunsOnSubFrames(False)
+    return script
 
 
 class OdooWebPage(QWebEnginePage):
     """Page policy: keep Odoo inside, push everything else outside."""
 
     external_link_requested = Signal(QUrl)
+    #: Odoo's own client answered one of its RPC calls with an expired session.
+    session_expired = Signal()
 
     def __init__(self, profile: QWebEngineProfile, account: Account, parent: QWidget) -> None:
         super().__init__(profile, parent)
         self._account = account
         self._host = QUrl(account.url).host()
         self.newWindowRequested.connect(self._on_new_window_requested)
+        self.scripts().insert(_session_expiry_script())
 
     def set_account(self, account: Account) -> None:
         self._account = account
@@ -114,6 +202,12 @@ class OdooWebPage(QWebEnginePage):
         line: int,
         source: str,
     ) -> None:
+        if SESSION_EXPIRED_MARKER in message:
+            # Not a log line: this is the injected script reporting, and the
+            # console is how it reports. See `_SESSION_EXPIRY_SCRIPT`.
+            _log.info("Odoo's web client reported an expired session")
+            self.session_expired.emit()
+            return
         if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
             _log.warning("JS error %s:%s - %s", source, line, message)
 
@@ -128,6 +222,13 @@ class OdooWebView(QWebEngineView):
     #: The page asked to print - ``window.print()`` from a POS receipt, or the
     #: print button inside Chromium's PDF viewer showing an Odoo report.
     print_requested = Signal()
+    #: Forwarded from the page: Odoo's client lost the session mid-flight.
+    session_expired = Signal()
+    #: A navigation *finished*, successfully, on this account's host, with the
+    #: path it landed on. Deliberately separate from ``path_changed``, which
+    #: fires the moment a navigation is asked for and says nothing about
+    #: whether the server answered it.
+    page_loaded = Signal(str)
 
     def __init__(
         self,
@@ -144,9 +245,10 @@ class OdooWebView(QWebEngineView):
 
         self.urlChanged.connect(self._on_url_changed)
         self.loadStarted.connect(lambda: self.loading_changed.emit(True))
-        self.loadFinished.connect(lambda _ok: self.loading_changed.emit(False))
+        self.loadFinished.connect(self._on_load_finished)
         # Fires for window.print() and for the PDF viewer's print button.
         self._page.printRequested.connect(self.print_requested.emit)
+        self._page.session_expired.connect(self.session_expired.emit)
 
     def _configure_settings(self) -> None:
         settings = self._page.settings()
@@ -193,3 +295,8 @@ class OdooWebView(QWebEngineView):
     def _on_url_changed(self, url: QUrl) -> None:
         if url.host() == QUrl(self._account.url).host():
             self.path_changed.emit(self.current_path())
+
+    def _on_load_finished(self, ok: bool) -> None:
+        self.loading_changed.emit(False)
+        if ok and self.url().host() == QUrl(self._account.url).host():
+            self.page_loaded.emit(self.current_path())
