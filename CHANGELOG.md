@@ -11,7 +11,25 @@ workflow refuses to build a tag that disagrees with it.
 > Their entries are reconstructed from `ROADMAP.md` and dated by commit, and no
 > binaries were distributed for them.
 
-## [0.2.0] - unreleased
+## [0.2.1] - unreleased
+
+### Fixed
+
+- **An upgrade now closes the running app by itself instead of stopping on
+  "Setup was unable to automatically close all applications".** The installer
+  asked Windows to close the app politely, and Windows declines to do that to
+  the helper processes the embedded browser runs, so every update ended on an
+  error asking the user to close the program that the update was there to
+  replace. The installer is now allowed to close them outright; the app itself
+  is still asked first, so it still shuts down cleanly.
+- **The till is started again once the upgrade is done.** It was meant to be
+  all along, but Windows only restarts a program that asked to be restarted
+  and this one never did - so a successful silent upgrade would have left the
+  machine sitting on the desktop with nothing running. The app now asks, and
+  the installer starts it as the signed-in user rather than as the
+  administrator who approved the update.
+
+## [0.2.0] - 2026-09-21
 
 ### Added
 
@@ -309,7 +327,8 @@ the web client under a native app bar.
 - A native app bar carrying the product mark, the build number, navigation, the
   signed-in user and the interface language.
 
-[0.2.0]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.11...HEAD
+[0.2.1]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.11...v0.2.0
 [0.1.11]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.8...v0.1.9
