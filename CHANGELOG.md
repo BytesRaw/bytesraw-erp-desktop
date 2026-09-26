@@ -11,7 +11,28 @@ workflow refuses to build a tag that disagrees with it.
 > Their entries are reconstructed from `ROADMAP.md` and dated by commit, and no
 > binaries were distributed for them.
 
-## [0.2.1] - unreleased
+## [0.2.2] - unreleased
+
+### Added
+
+- **Any Odoo report can have a printer of its own.** Settings has a new
+  *Report printers* card: pick a report, pick a printer, and that report goes
+  there from then on - product labels to a label printer, delivery slips to the
+  warehouse printer, whatever the shop needs. Every other report still prints
+  on the report printer, and the receipt printer is unchanged. A report with a
+  printer of its own is printed at its own page size, so a small label is not
+  stretched over the printer's default paper. A report can also be set not to
+  print at all, in which case it is saved to Downloads and a message says so.
+- Reports are listed from the connected Odoo database when the signed-in user
+  is an administrator. Any user can instead print a report once and then pick
+  it from the reports printed on this computer.
+
+### Fixed
+
+- A settings card whose contents changed after the page opened could be drawn
+  squashed, with its controls clipped and overlapping.
+
+## [0.2.1] - 2026-09-21
 
 ### Fixed
 
@@ -327,7 +348,8 @@ the web client under a native app bar.
 - A native app bar carrying the product mark, the build number, navigation, the
   signed-in user and the interface language.
 
-[0.2.1]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.2.0...HEAD
+[0.2.2]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.11...v0.2.0
 [0.1.11]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/BytesRaw/bytesraw-erp-desktop/compare/v0.1.9...v0.1.10
