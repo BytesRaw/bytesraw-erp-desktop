@@ -73,6 +73,18 @@ ATTACHMENT_DOWNLOAD_URL_PREFIXES: Final[tuple[str, ...]] = tuple(
     prefix for prefix in REPORT_URL_PREFIXES if prefix != "/report/pdf/"
 )
 
+#: The request header the injected script stamps on Odoo's report XHR, carrying
+#: the report's technical name (``product.report_producttemplatelabel_dymo``).
+#: Odoo puts that name in the *body* of its ``/report/download`` POST, which a
+#: ``QWebEngineUrlRequestInterceptor`` cannot read - but it can read headers,
+#: so the page moves the name to where the interceptor looks. Odoo ignores an
+#: unknown header. See ``web_view._REPORT_NAME_SCRIPT``.
+REPORT_NAME_HEADER: Final[str] = "X-Bytesraw-Report"
+
+#: The two report routes whose path names the report: ``/report/pdf/<name>/...``
+#: and ``/report/text/<name>/...`` (``addons/web/controllers/report.py``).
+REPORT_NAME_PATH_PREFIXES: Final[tuple[str, ...]] = ("/report/pdf/", "/report/text/")
+
 #: Odoo's own class name for an expired session, as ``serialize_exception``
 #: writes it into ``error.data.name`` (``odoo/http.py:349``). The accompanying
 #: ``error.code`` is 100 and ``error.message`` is "Odoo Session Expired", but

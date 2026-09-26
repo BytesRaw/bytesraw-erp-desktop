@@ -147,6 +147,13 @@ The app survives the things a real deployment does to it.
 
 - [x] **M3.1** Receipt printing via `QWebEngineView.print()` to a `QPrinter` (done in v0.1.1)
 - [ ] **M3.2** Printer selection and paper profile per account
+- [x] **M3.8** A printer per Odoo report (v0.2.2). Rules are keyed on the
+      technical report name, which an injected script copies from the body
+      of Odoo's `/report/download` request into a header the request
+      interceptor can read; a rule's report prints at its own page size
+- [ ] **M3.9** Raw ZPL printing: send Odoo's `(ZPL)` label reports
+      (`qweb-text`) straight to a Zebra-type printer through the Windows
+      spooler. Today they are saved to Downloads
 - [ ] **M3.3** ESC/POS direct printing for thermal printers over USB and serial
 - [ ] **M3.4** Barcode scanner input (HID keyboard-wedge pass-through to the web view)
 - [ ] **M3.5** Cash drawer kick signal

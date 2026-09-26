@@ -12,7 +12,10 @@ shell needs and a bare browser view does not:
   restored on the next launch;
 * an Odoo session that dies underneath the running web client is reported to
   the shell straight away, rather than being left in the modal dialog Odoo
-  puts it in - see :data:`_SESSION_EXPIRY_SCRIPT`.
+  puts it in - see :data:`_SESSION_EXPIRY_SCRIPT`;
+* every report Odoo's Print button asks for carries its name out where the
+  shell can read it, so a report can have a printer of its own - see
+  :data:`_REPORT_NAME_SCRIPT`.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from PySide6.QtWebEngineCore import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget
 
-from bytesraw_erp.constants import SESSION_EXPIRED_NAME
+from bytesraw_erp.constants import REPORT_NAME_HEADER, SESSION_EXPIRED_NAME
 from bytesraw_erp.data.models import Account
 from bytesraw_erp.services.profile_manager import is_attachment_download_url
 
@@ -104,6 +107,61 @@ _SESSION_EXPIRY_SCRIPT = f"""
 """
 
 
+#: Copy the report's name from the body of Odoo's report request to a header.
+#:
+#: Odoo 19's Print button never navigates. ``downloadReport``
+#: (``addons/web/static/src/webclient/actions/reports/utils.js``) hands
+#: ``download()`` a form whose ``data`` field is
+#: ``JSON.stringify(["/report/pdf/<report_name>/<ids>", "qweb-pdf"])``, and
+#: ``download.js`` sends it as a ``FormData`` XHR to ``/report/download``. The
+#: report's technical name is therefore only in the request *body*, which the
+#: profile's ``QWebEngineUrlRequestInterceptor`` cannot read. It can read
+#: headers - measured, a header set here arrives in ``httpHeaders()`` on the
+#: same request - so the name is moved to one, and
+#: :class:`~bytesraw_erp.services.report_watcher.ReportRequestWatcher` receives
+#: it together with the request it belongs to.
+#:
+#: The technical name rather than the title, because the title is translated
+#: and the name is not: a rule written on an English till still matches on an
+#: Arabic one. Anything unexpected is left alone - the request still goes out,
+#: and an unnamed report prints on the report printer as it always has.
+_REPORT_NAME_SCRIPT = f"""
+(function () {{
+    var send = XMLHttpRequest.prototype.send;
+    if (!send || send.__bytesrawReportName) {{ return; }}
+    var route = new RegExp("^/report/(?:pdf|text)/([^/?#]+)");
+    function patched(body) {{
+        try {{
+            if (typeof FormData !== "undefined" && body instanceof FormData
+                    && body.has("data")) {{
+                var spec = JSON.parse(body.get("data"));
+                var match = Array.isArray(spec) && typeof spec[0] === "string"
+                    ? route.exec(spec[0]) : null;
+                if (match) {{
+                    this.setRequestHeader("{REPORT_NAME_HEADER}", match[1]);
+                }}
+            }}
+        }} catch (ignored) {{ /* not a report request; send it untouched */ }}
+        return send.apply(this, arguments);
+    }}
+    patched.__bytesrawReportName = true;
+    XMLHttpRequest.prototype.send = patched;
+}})();
+"""
+
+
+def _report_name_script() -> QWebEngineScript:
+    script = QWebEngineScript()
+    script.setName("bytesraw-report-name")
+    script.setSourceCode(_REPORT_NAME_SCRIPT)
+    # Same placement as the session script, for the same reasons: before Odoo's
+    # modules capture the prototype, and in the world Odoo's XHR lives in.
+    script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+    script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+    script.setRunsOnSubFrames(False)
+    return script
+
+
 def _session_expiry_script() -> QWebEngineScript:
     script = QWebEngineScript()
     script.setName("bytesraw-session-expiry")
@@ -132,6 +190,7 @@ class OdooWebPage(QWebEnginePage):
         self._host = QUrl(account.url).host()
         self.newWindowRequested.connect(self._on_new_window_requested)
         self.scripts().insert(_session_expiry_script())
+        self.scripts().insert(_report_name_script())
 
     def set_account(self, account: Account) -> None:
         self._account = account

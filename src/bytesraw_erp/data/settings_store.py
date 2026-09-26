@@ -23,6 +23,7 @@ from bytesraw_erp.constants import SETTINGS_VERSION
 from bytesraw_erp.core.errors import ConfigError
 from bytesraw_erp.core.paths import settings_file
 from bytesraw_erp.data.models import (
+    NO_PRINTER,
     DisplaySettings,
     PrintSettings,
     UpdateSettings,
@@ -30,6 +31,13 @@ from bytesraw_erp.data.models import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _describe_printer(name: str | None) -> str:
+    """A printer slot for the log, where an unassigned one is not the default."""
+    if name is NO_PRINTER:
+        return "<not assigned>"
+    return name or "<system default>"
 
 
 class SettingsStore:
@@ -111,11 +119,16 @@ class SettingsStore:
         self._printing = settings
         self.save()
         _log.info(
-            "Print settings: mode=%s report_printer=%s pos_printer=%s auto_print=%s",
+            "Print settings: mode=%s report_printer=%s pos_printer=%s auto_print=%s "
+            "report_printers=[%s]",
             settings.mode.value,
-            settings.report_printer_name or "<system default>",
-            settings.pos_printer_name or "<system default>",
+            _describe_printer(settings.report_printer_name),
+            _describe_printer(settings.pos_printer_name),
             settings.auto_print_reports,
+            ", ".join(
+                f"{rule.report_name}->{_describe_printer(rule.printer_name)}"
+                for rule in settings.report_printers
+            ),
         )
 
     # -- display -----------------------------------------------------------

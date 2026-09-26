@@ -33,7 +33,16 @@ both off-screen for most of the page's length.
 
 Which card goes in which column is declared, not measured. Appearance, Display
 and Printing are the machine's own settings and stay together on the left;
-Updates and About are about the build and stay together on the right.
+Updates and About are about the build and stay together on the right. Report
+printers heads the right-hand column: it belongs with Printing, but the left
+column is already the longer one, and a card that grows a row per rule would
+push Printing's own controls out of sight below it.
+
+**Report printers** sends particular Odoo reports to a printer of their own -
+labels to the label printer, delivery slips to the warehouse. A report is
+chosen from two places: the reports this computer has printed since launch,
+which anyone can use, and the database's full list, which Odoo only lets an
+administrator read (see :mod:`bytesraw_erp.services.report_catalog`).
 """
 
 from __future__ import annotations
@@ -59,14 +68,22 @@ from bytesraw_erp.core.errors import BytesrawError
 from bytesraw_erp.core.paths import logs_dir, reports_dir
 from bytesraw_erp.data.models import (
     NO_PRINTER,
+    SYSTEM_DEFAULT_PRINTER,
     DisplaySettings,
     PrintMode,
     PrintSettings,
     RenderMode,
+    ReportPrinterRule,
     UpdateChannel,
 )
 from bytesraw_erp.services.graphics import active_render_mode
 from bytesraw_erp.services.print_service import available_printers, default_printer_name
+from bytesraw_erp.services.report_catalog import (
+    ReportInfo,
+    ReportListUnavailable,
+    fetch_reports,
+)
+from bytesraw_erp.services.tasks import run_async
 from bytesraw_erp.services.update_service import Update, is_installed_build
 from bytesraw_erp.ui.app_context import AppContext
 from bytesraw_erp.ui.router import Router
@@ -128,6 +145,13 @@ class SettingsPage(QWidget):
         #: The release currently on offer, so the buttons and the status line
         #: agree with each other and survive leaving and re-entering the page.
         self._pending: Update | None = None
+        #: Printers as last read from Windows, so every picker on the page -
+        #: including one row per report rule - offers the same list.
+        self._printer_names: list[str] = []
+        self._default_label = ""
+        #: The database's reports by technical name, when they could be read.
+        #: Recently printed reports take their titles from here when possible.
+        self._catalog: dict[str, ReportInfo] = {}
 
         self._shell = PageShell(
             "Settings",
@@ -148,6 +172,7 @@ class SettingsPage(QWidget):
         self._columns.add_card(self._build_appearance_card(), column=0)
         self._columns.add_card(self._build_display_card(), column=0)
         self._columns.add_card(self._build_printing_card(), column=0)
+        self._columns.add_card(self._build_report_printers_card(), column=1)
         self._columns.add_card(self._build_updates_card(), column=1)
         self._columns.add_card(self._build_about_card(), column=1)
         self._shell.body.addWidget(self._columns)
@@ -228,8 +253,9 @@ class SettingsPage(QWidget):
             self._section(
                 "printer-cog",
                 "Printing",
-                "Reports print on A4. The Point of Sale screen prints on the "
-                "receipt printer, and nothing else uses it.",
+                "Reports print on A4 unless given a printer of their own. The "
+                "Point of Sale screen prints on the receipt printer, and nothing "
+                "else uses it.",
             )
         )
 
@@ -261,7 +287,7 @@ class SettingsPage(QWidget):
             Field(
                 "Report printer (A4)",
                 self._report_printer,
-                "Every PDF report prints here, the Point of Sale included.",
+                "Every report without a printer of its own prints here.",
             )
         )
 
@@ -296,6 +322,49 @@ class SettingsPage(QWidget):
         )
         self._keep_copy.toggled.connect(self._on_printing_changed)
         card.body.addWidget(self._keep_copy)
+        return card
+
+    def _build_report_printers_card(self) -> Card:
+        card = Card()
+        card.body.addWidget(
+            self._section(
+                "printer",
+                "Report printers",
+                "Send particular Odoo reports to a printer of their own - labels "
+                "to a label printer, for instance. Every other report uses the "
+                "report printer.",
+            )
+        )
+
+        rules = QWidget()
+        self._rules = QVBoxLayout(rules)
+        self._rules.setContentsMargins(0, 0, 0, 0)
+        self._rules.setSpacing(12)
+        card.body.addWidget(rules)
+        self._rules_empty = hint("No report has a printer of its own yet.")
+        card.body.addWidget(self._rules_empty)
+
+        self._report_choice = QComboBox()
+        self._report_choice.setMaximumWidth(_WIDE_CONTROL)
+        self._report_choice.currentIndexChanged.connect(self._sync_add_rule)
+        card.body.addWidget(Field("Add a report", self._report_choice))
+
+        self._rule_printer_choice = QComboBox()
+        self._add_rule = QPushButton("Add")
+        self._add_rule.clicked.connect(self._on_add_rule)
+        row = QWidget()
+        row.setMaximumWidth(_WIDE_CONTROL)
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        line.addWidget(self._rule_printer_choice, 1)
+        line.addWidget(self._add_rule)
+        card.body.addWidget(Field("On printer", row))
+
+        # Says where the list of reports came from, and what to do when it is
+        # short - the one thing a user who cannot find their report needs.
+        self._catalog_hint = hint("")
+        card.body.addWidget(self._catalog_hint)
         return card
 
     def _build_updates_card(self) -> Card:
@@ -425,6 +494,9 @@ class SettingsPage(QWidget):
             self._mode.setCurrentIndex(max(self._mode.findData(settings.mode.value), 0))
             self._select_printer(self._report_printer, settings.report_printer_name, "report")
             self._select_printer(self._pos_printer, settings.pos_printer_name, "receipt")
+            self._render_rules(settings)
+            self._refresh_report_choices()
+            self._load_catalog()
             # Not gated on auto-print: with printing off, keeping a copy is
             # the only thing that leaves a report anywhere the user can find
             # it. Only the saving mode, which keeps one unconditionally, takes
@@ -447,14 +519,19 @@ class SettingsPage(QWidget):
         throughout the one reload that calls it.
         """
         default = default_printer_name()
-        label = f"Windows default ({default})" if default else "Windows default (none set)"
-        names = available_printers()
-        for combo in (self._report_printer, self._pos_printer):
-            combo.clear()
-            combo.addItem(label, _SYSTEM_DEFAULT)
-            combo.addItem("Not assigned - do not print", NO_PRINTER)
-            for name in names:
-                combo.addItem(name, name)
+        self._default_label = (
+            f"Windows default ({default})" if default else "Windows default (none set)"
+        )
+        self._printer_names = available_printers()
+        for combo in (self._report_printer, self._pos_printer, self._rule_printer_choice):
+            self._fill_printer_combo(combo)
+
+    def _fill_printer_combo(self, combo: QComboBox) -> None:
+        combo.clear()
+        combo.addItem(self._default_label, _SYSTEM_DEFAULT)
+        combo.addItem("Not assigned - do not print", NO_PRINTER)
+        for name in self._printer_names:
+            combo.addItem(name, name)
 
     def _refresh_printer_hint(self, settings: PrintSettings) -> None:
         """Say what the two pickers add up to, when it is not obvious.
@@ -512,6 +589,180 @@ class SettingsPage(QWidget):
                 "Windows default will be used."
             )
         combo.setCurrentIndex(index)
+
+    # -- report printers ---------------------------------------------------
+
+    def _render_rules(self, settings: PrintSettings) -> None:
+        """One row per rule: the report, its printer, and a way to remove it.
+
+        Rebuilt rather than patched: a rule list is a handful of rows, and
+        rebuilding is the one way the rows cannot drift from storage.
+        """
+        while self._rules.count():
+            item = self._rules.takeAt(0)
+            if (widget := item.widget()) is not None:
+                widget.deleteLater()
+        for rule in settings.report_printers:
+            self._rules.addWidget(self._rule_row(rule))
+        self._rules_empty.setVisible(not settings.report_printers)
+
+    def _rule_row(self, rule: ReportPrinterRule) -> QWidget:
+        combo = QComboBox()
+        self._fill_printer_combo(combo)
+        index = combo.findData(rule.printer_name)
+        if index < 0:
+            # Gone from Windows since the rule was written. Said, not hidden -
+            # and printed on the Windows default meanwhile, which is what
+            # `_build_printer` does with a printer it cannot find.
+            index = 0
+            self._banner.show_info(
+                f"The printer '{rule.printer_name}' for {rule.label} is no longer "
+                "available, so the Windows default will be used."
+            )
+        combo.setCurrentIndex(index)
+        combo.currentIndexChanged.connect(
+            lambda _i, name=rule.report_name, box=combo: self._on_rule_printer_changed(name, box)
+        )
+
+        remove = QPushButton("Remove")
+        remove.setProperty("variant", "link")
+        remove.setToolTip(f"{rule.label} goes back to the report printer.")
+        remove.clicked.connect(lambda _c=False, name=rule.report_name: self._on_remove_rule(name))
+
+        row = QWidget()
+        row.setMaximumWidth(_WIDE_CONTROL)
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        line.addWidget(combo, 1)
+        line.addWidget(remove)
+        # The technical name underneath, because titles repeat - Odoo ships two
+        # "Package Barcode (PDF)" - and it is what the rule actually matches.
+        return Field(rule.label, row, rule.report_name)
+
+    def _refresh_report_choices(self) -> None:
+        """Offer every report that has no printer of its own yet.
+
+        Printed-on-this-computer first: it is the short list, it is the one a
+        cashier's session can use, and it is almost always what the user just
+        went and printed in order to set it up.
+        """
+        taken = {r.report_name for r in self._context.settings.printing.report_printers}
+        previous = self._report_choice.currentData()
+        self._report_choice.blockSignals(True)
+        try:
+            self._report_choice.clear()
+            self._report_choice.addItem("Choose a report...", None)
+            recent = [
+                (name, self._catalog[name].title if name in self._catalog else stem)
+                for name, stem in self._context.recent_reports.items()
+                if name not in taken
+            ]
+            for name, title in recent:
+                self._report_choice.addItem(f"{title} - printed recently", name)
+            listed = [info for info in self._catalog.values() if info.report_name not in taken]
+            if recent and listed:
+                self._report_choice.insertSeparator(self._report_choice.count())
+            titles = [info.title for info in listed]
+            for info in listed:
+                text = info.title or info.report_name
+                if titles.count(info.title) > 1:
+                    text = f"{text} ({info.report_name})"
+                self._report_choice.addItem(text, info.report_name)
+            for index in range(self._report_choice.count()):
+                if name := self._report_choice.itemData(index):
+                    self._report_choice.setItemData(index, name, Qt.ItemDataRole.ToolTipRole)
+            self._report_choice.setCurrentIndex(max(self._report_choice.findData(previous), 0))
+        finally:
+            self._report_choice.blockSignals(False)
+        self._sync_add_rule()
+
+    def _sync_add_rule(self, *_args: object) -> None:
+        self._add_rule.setEnabled(bool(self._report_choice.currentData()))
+
+    def _load_catalog(self) -> None:
+        """Read the database's reports in the background, when there is one."""
+        client, session = self._context.client, self._context.session
+        if client is None or session is None:
+            self._set_catalog_hint("Sign in to Odoo to choose from every report on the database.")
+            return
+        self._catalog_hint.setText("Reading the reports on this Odoo database...")
+        run_async(
+            fetch_reports,
+            client,
+            session.language,
+            on_success=self._on_catalog_loaded,
+            on_error=self._on_catalog_failed,
+        )
+
+    def _on_catalog_loaded(self, reports: object) -> None:
+        self._catalog = {
+            info.report_name: info
+            for info in (reports if isinstance(reports, list) else [])
+            if isinstance(info, ReportInfo)
+        }
+        self._catalog_hint.setText("")
+        self._refresh_report_choices()
+
+    def _on_catalog_failed(self, exc: Exception) -> None:
+        if not isinstance(exc, ReportListUnavailable):
+            _log.warning("Could not read the report list: %s", exc)
+            self._set_catalog_hint(f"The reports could not be read from Odoo: {exc}")
+            return
+        self._set_catalog_hint(str(exc))
+
+    def _set_catalog_hint(self, text: str) -> None:
+        """Say where the short list comes from when the long one is missing."""
+        if not self._context.recent_reports:
+            text += " A report printed on this computer is listed here too."
+        self._catalog_hint.setText(text)
+
+    def _on_add_rule(self) -> None:
+        name = self._report_choice.currentData()
+        stored = self._context.settings.printing
+        if not name or stored.rule_for(name) is not None:
+            return
+        info = self._catalog.get(name)
+        title = info.title if info else self._context.recent_reports.get(name, "")
+        rule = ReportPrinterRule(name, title, _printer_choice(self._rule_printer_choice))
+        if not self._store_rules((*stored.report_printers, rule)):
+            return
+        self._rule_printer_choice.setCurrentIndex(
+            max(self._rule_printer_choice.findData(SYSTEM_DEFAULT_PRINTER), 0)
+        )
+        self._banner.show_info(f"{rule.label} now prints on its own printer.")
+
+    def _on_rule_printer_changed(self, report_name: str, combo: QComboBox) -> None:
+        printer = _printer_choice(combo)
+        rules = tuple(
+            r.evolve(printer_name=printer) if r.report_name == report_name else r
+            for r in self._context.settings.printing.report_printers
+        )
+        # The row stays: rebuilding it would take the combo out from under
+        # the change it is still delivering.
+        if self._store_rules(rules, rerender=False):
+            self._banner.show_info("Print settings saved.")
+
+    def _on_remove_rule(self, report_name: str) -> None:
+        stored = self._context.settings.printing
+        rule = stored.rule_for(report_name)
+        rules = tuple(r for r in stored.report_printers if r.report_name != report_name)
+        if self._store_rules(rules) and rule is not None:
+            self._banner.show_info(f"{rule.label} prints on the report printer again.")
+
+    def _store_rules(self, rules: tuple[ReportPrinterRule, ...], *, rerender: bool = True) -> bool:
+        settings = self._context.settings.printing.evolve(report_printers=rules)
+        try:
+            self._context.settings.set_printing(settings)
+        except BytesrawError as exc:
+            self._banner.show_error(str(exc))
+            return False
+        if rerender:
+            # Safe from inside a row's own Remove button: the old rows go by
+            # deleteLater, after this click has finished being delivered.
+            self._render_rules(settings)
+            self._refresh_report_choices()
+        return True
 
     def _refresh_render_hint(self) -> None:
         """Say whether the stored mode is the one actually in force.
@@ -601,6 +852,9 @@ class SettingsPage(QWidget):
             mode=mode,
             report_printer_name=_printer_choice(self._report_printer),
             pos_printer_name=_printer_choice(self._pos_printer),
+            # Not on this card's controls; carried through untouched, or
+            # changing the print mode would silently delete every rule.
+            report_printers=stored.report_printers,
             auto_print_reports=(
                 stored.auto_print_reports if forced else self._auto_print.isChecked()
             ),

@@ -95,6 +95,7 @@ from bytesraw_erp.data.models import (
     SessionContext,
 )
 from bytesraw_erp.services.print_service import PrintError
+from bytesraw_erp.services.report_watcher import report_name_from_path
 from bytesraw_erp.services.session_service import (
     apply_odoo_color_scheme,
     build_session_context,
@@ -717,6 +718,20 @@ class OdooPage(QWidget):
         """
         return self._web is not None and self._web.current_path().startswith(POS_PATH_PREFIX)
 
+    def _page_printer(self, settings: PrintSettings) -> str | None:
+        """The device for a print of the page on screen.
+
+        A report open in Chromium's PDF viewer (``/report/pdf/<name>/...``) is
+        that report, so its own printer applies there too - a rule should not
+        depend on which of Odoo's two routes the report happened to take.
+        Anything else is a receipt under ``/pos/`` or an A4 page.
+        """
+        if self._web is not None:
+            name = report_name_from_path(QUrl(self._web.current_path()).path())
+            if settings.rule_for(name) is not None:
+                return settings.report_printer_for(name)
+        return settings.printer_for(pos=self._is_pos())
+
     def _print(self, mode: PrintMode) -> None:
         """Print the page with an explicit mode, on the printer for this screen.
 
@@ -731,9 +746,7 @@ class OdooPage(QWidget):
             return
         settings = self._context.settings.printing
         try:
-            self._context.printing.print_view(
-                self._web, mode, self, settings.printer_for(pos=self._is_pos())
-            )
+            self._context.printing.print_view(self._web, mode, self, self._page_printer(settings))
         except PrintError as exc:
             QMessageBox.warning(self, "Print", str(exc))
 
@@ -752,7 +765,7 @@ class OdooPage(QWidget):
         if not settings.mode.prints:
             self._save_page()
             return
-        if settings.printer_for(pos=self._is_pos()) is NO_PRINTER:
+        if self._page_printer(settings) is NO_PRINTER:
             which = "receipt" if self._is_pos() else "report"
             _log.info("No %s printer is assigned; the page was not printed", which)
             self._toasts.show_message(
@@ -783,13 +796,14 @@ class OdooPage(QWidget):
             on_action=lambda: self._reveal(path),
         )
 
-    def _on_report_downloaded(self, path: Path) -> None:
+    def _on_report_downloaded(self, path: Path, report_name: str = "") -> None:
         """A QWeb report PDF arrived from Odoo. Print it per local settings.
 
         This is what makes Odoo's own Print button reach paper: the web client
         answers a print action with a PDF download, which a plain browser would
-        simply drop in the Downloads folder. It always prints on the A4
-        printer - a report is an A4 document even when POS produced it.
+        simply drop in the Downloads folder. It prints on the report's own
+        printer when it has one, and otherwise on the A4 printer - a report is
+        an A4 document even when POS produced it.
 
         Three separate things can say the report is not to be printed, and they
         are told apart on purpose: the mode saves instead of printing, no A4
@@ -799,14 +813,14 @@ class OdooPage(QWidget):
         directory it arrived in is pruned within a day.
         """
         settings = self._context.settings.printing
-        printing = settings.prints_reports()
+        printing = settings.prints_reports(report_name)
         # Copy it when asked to, and whenever nothing is going to print it: in
         # that case Downloads is the only place it will still exist tomorrow.
         copied = self._keep_copy(path) if settings.keep_report_copy or not printing else None
 
         if not printing:
             landed = copied or path
-            reason = self._why_not_printed(settings)
+            reason = self._why_not_printed(settings, report_name)
             _log.info("%s; kept %s", reason, landed)
             self._toasts.show_message(
                 f"Saved {landed.name} - {reason.lower()}",
@@ -816,16 +830,20 @@ class OdooPage(QWidget):
             return
 
         try:
-            self._context.printing.print_pdf_with(path, settings, self)
+            self._context.printing.print_pdf_with(path, settings, self, report_name)
         except PrintError as exc:
             QMessageBox.warning(self, "Print", str(exc))
 
     @staticmethod
-    def _why_not_printed(settings: PrintSettings) -> str:
+    def _why_not_printed(settings: PrintSettings, report_name: str = "") -> str:
         """Which of the three reasons stopped this report at the Downloads folder."""
         if not settings.mode.prints:
             return "Reports are set to be saved"
-        if settings.report_printer_name is NO_PRINTER:
+        if settings.report_printer_for(report_name) is NO_PRINTER:
+            # Its own rule said so, which is a different fix from the A4 slot:
+            # the user goes looking under Report printers, not Report printer.
+            if settings.rule_for(report_name) is not None:
+                return "This report is set not to print"
             return "No report printer is assigned"
         return "Automatic report printing is off"
 

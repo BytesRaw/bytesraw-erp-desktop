@@ -40,6 +40,7 @@ settings.
 
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
@@ -262,4 +263,11 @@ def _drain(layout: QLayout) -> None:
     losing the state of every control on it.
     """
     while layout.count():
-        layout.takeAt(0)
+        # The *item* is deleted, never the widget it wraps. `takeAt` hands the
+        # item back instead, and one left alive stays registered as its
+        # widget's size cache: Qt clears only that first item when a card's
+        # content changes, so the item actually in the column kept the height
+        # it measured on the first pass. Measured: a card whose rows arrived
+        # after the page was shown stayed 310px against a 450px minimum,
+        # every control inside it crushed.
+        shiboken6.delete(layout.takeAt(0))

@@ -277,6 +277,54 @@ def coerce_printer_name(raw: object) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportPrinterRule:
+    """One Odoo report, sent to a printer of its own.
+
+    Keyed on Odoo's *technical* report name (``stock.report_deliveryslip``),
+    never on the title: the title is translated, so a rule written against an
+    English database would miss the same report on an Arabic one, and two
+    different reports can share a title (Odoo ships two "Package Barcode (PDF)").
+    """
+
+    #: ``ir.actions.report.report_name``.
+    report_name: str
+    #: What the settings page calls it. Kept with the rule so it still reads
+    #: sensibly while no Odoo session is open to ask.
+    title: str = ""
+    #: As for the other printer slots: a name, :data:`SYSTEM_DEFAULT_PRINTER`,
+    #: or :data:`NO_PRINTER` to keep this report off paper altogether.
+    printer_name: str | None = SYSTEM_DEFAULT_PRINTER
+
+    @property
+    def label(self) -> str:
+        return self.title or self.report_name
+
+    def evolve(self, **changes: Any) -> ReportPrinterRule:
+        return replace(self, **changes)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "report_name": self.report_name,
+            "title": self.title,
+            "printer_name": self.printer_name,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> ReportPrinterRule | None:
+        """One stored rule, or ``None`` for an entry that names no report."""
+        if not isinstance(raw, dict):
+            return None
+        name = str(raw.get("report_name") or "").strip()
+        if not name:
+            return None
+        return cls(
+            report_name=name,
+            title=str(raw.get("title") or ""),
+            printer_name=coerce_printer_name(raw.get("printer_name", SYSTEM_DEFAULT_PRINTER)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PrintSettings:
     """How this installation prints. Configured once, on the settings page.
 
@@ -295,6 +343,11 @@ class PrintSettings:
     printed here at all. A back office with no receipt printer and a till with
     no A4 printer are both ordinary, and neither should have its documents sent
     to whatever device Windows happens to name.
+
+    **Any report can also have a printer of its own** - see
+    :attr:`report_printers`. That is how a label printer is set up, and how a
+    delivery slip reaches the warehouse printer: the user says which report
+    goes where, rather than the app guessing from the document.
     """
 
     #: Dialog, preview, straight to paper, or saved to Downloads without being
@@ -316,6 +369,10 @@ class PrintSettings:
     auto_print_reports: bool = True
     #: Also keep the PDF in the Downloads folder.
     keep_report_copy: bool = False
+    #: Reports that print somewhere other than :attr:`report_printer_name`,
+    #: at most one rule per report. Everything without a rule - including a
+    #: report nothing could name - uses the report printer.
+    report_printers: tuple[ReportPrinterRule, ...] = ()
 
     def printer_for(self, *, pos: bool) -> str | None:
         """The device for this job: the receipt roll, or A4.
@@ -328,19 +385,37 @@ class PrintSettings:
         """
         return self.pos_printer_name if pos else self.report_printer_name
 
-    def prints_reports(self) -> bool:
+    def rule_for(self, report_name: str) -> ReportPrinterRule | None:
+        """The rule for this report, if it has one. ``""`` never has one."""
+        if not report_name:
+            return None
+        return next((r for r in self.report_printers if r.report_name == report_name), None)
+
+    def report_printer_for(self, report_name: str = "") -> str | None:
+        """The device for a report PDF: its own printer, or the A4 one.
+
+        :data:`NO_PRINTER` means this report is not printed here - either its
+        rule says so, or it has none and no A4 printer is assigned.
+        """
+        rule = self.rule_for(report_name)
+        return rule.printer_name if rule is not None else self.report_printer_name
+
+    def prints_reports(self, report_name: str = "") -> bool:
         """Whether a report arriving from Odoo should reach paper by itself.
 
         Three separate ways of saying no, and they are not interchangeable:
         the user turned automatic printing off, the mode saves instead of
-        printing, or no A4 printer is assigned to print on. The caller has to
-        say *which* when it tells the user what happened, so this is only the
-        decision, never the reason.
+        printing, or no printer is assigned to print this report on. The
+        caller has to say *which* when it tells the user what happened, so this
+        is only the decision, never the reason.
+
+        ``report_name`` matters to the third: a till with no A4 printer still
+        prints the labels it has a label printer for.
         """
         return (
             self.auto_print_reports
             and self.mode.prints
-            and self.report_printer_name is not NO_PRINTER
+            and self.report_printer_for(report_name) is not NO_PRINTER
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -350,6 +425,7 @@ class PrintSettings:
             "pos_printer_name": self.pos_printer_name,
             "auto_print_reports": self.auto_print_reports,
             "keep_report_copy": self.keep_report_copy,
+            "report_printers": [rule.to_dict() for rule in self.report_printers],
         }
 
     @classmethod
@@ -373,10 +449,28 @@ class PrintSettings:
             pos_printer_name=coerce_printer_name(raw.get("pos_printer_name", legacy)),
             auto_print_reports=bool(raw.get("auto_print_reports", True)),
             keep_report_copy=bool(raw.get("keep_report_copy", False)),
+            report_printers=_read_report_printers(raw.get("report_printers")),
         )
 
     def evolve(self, **changes: Any) -> PrintSettings:
         return replace(self, **changes)
+
+
+def _read_report_printers(raw: object) -> tuple[ReportPrinterRule, ...]:
+    """The stored rules, skipping anything unreadable and any second rule for
+    a report - the first one written wins, as it did on the page that wrote it.
+
+    A file from before rules existed has no key and reads as no rules, which is
+    what makes the section additive rather than a ``SETTINGS_VERSION`` bump.
+    """
+    if not isinstance(raw, list):
+        return ()
+    rules: dict[str, ReportPrinterRule] = {}
+    for entry in raw:
+        rule = ReportPrinterRule.from_dict(entry)
+        if rule is not None and rule.report_name not in rules:
+            rules[rule.report_name] = rule
+    return tuple(rules.values())
 
 
 @dataclass(frozen=True, slots=True)

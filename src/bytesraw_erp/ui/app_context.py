@@ -8,6 +8,8 @@ explicit: a page can only touch what the context exposes.
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
@@ -24,6 +26,9 @@ from bytesraw_erp.services.update_service import UpdateService
 from bytesraw_erp.ui.theme import ThemeController
 
 _log = logging.getLogger(__name__)
+
+#: How many recently printed reports the settings page is offered.
+_RECENT_REPORTS = 20
 
 
 class AppContext(QObject):
@@ -52,6 +57,12 @@ class AppContext(QObject):
         self.store = AccountStore()
         self.profiles = ProfileManager(self)
         self.printing = PrintService(self)
+        #: Reports printed since launch, newest first: technical name -> the
+        #: file name it arrived as. This is how a user who cannot read Odoo's
+        #: report list - anyone but an administrator - still chooses a report
+        #: for a printer: print it once, then pick it in settings.
+        self.recent_reports: dict[str, str] = {}
+        self.profiles.report_downloaded.connect(self._note_report)
         #: ``app.run`` loads the settings before the QApplication exists - the
         #: rendering mode has to be known by then - and hands that store on, so
         #: the file is read once and one object answers for it. A caller that
@@ -71,6 +82,15 @@ class AppContext(QObject):
         #: the destination has no other way to learn why it was opened.
         self._notice: str | None = None
         self._prefill: Account | None = None
+
+    def _note_report(self, path: Path, report_name: str) -> None:
+        if not report_name:
+            return
+        # The scratch directory numbers repeats - `invoice (1).pdf` - and that
+        # number is not part of what the report is called.
+        recent = {report_name: re.sub(r" \(\d+\)$", "", path.stem)}
+        recent.update((k, v) for k, v in self.recent_reports.items() if k != report_name)
+        self.recent_reports = dict(list(recent.items())[:_RECENT_REPORTS])
 
     # -- active session ----------------------------------------------------
 

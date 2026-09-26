@@ -20,6 +20,19 @@ verified as ``('POST', '/report/download', ResourceTypeXhr)`` - so this class
 notes each report request as it goes out and lets the download handler claim it
 when the blob arrives moments later.
 
+Which report
+------------
+The claim also says *which* report it was, so a report can be sent to a printer
+of its own. Odoo names the report only in the POST body -
+``data=["/report/pdf/<report_name>/<ids>", "qweb-pdf"]`` - and an interceptor
+cannot read a body. It can read headers, so the injected
+``web_view._REPORT_NAME_SCRIPT`` copies the name into
+:data:`~bytesraw_erp.constants.REPORT_NAME_HEADER` as the request goes out.
+The name and the request therefore arrive here *together*, in one call, and
+nothing has to line two separate streams of evidence back up. A request with
+no header - the script failed, or a future Odoo sends its reports differently -
+is still a report, just an unnamed one, and prints where every report did.
+
 Threading
 ---------
 ``interceptRequest`` is called on QtWebEngine's IO thread while ``claim`` is
@@ -31,11 +44,16 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from dataclasses import dataclass
 from threading import Lock
 
 from PySide6.QtWebEngineCore import QWebEngineUrlRequestInfo, QWebEngineUrlRequestInterceptor
 
-from bytesraw_erp.constants import REPORT_URL_PREFIXES
+from bytesraw_erp.constants import (
+    REPORT_NAME_HEADER,
+    REPORT_NAME_PATH_PREFIXES,
+    REPORT_URL_PREFIXES,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -45,13 +63,49 @@ _log = logging.getLogger(__name__)
 #: later in the session.
 _TTL_SECONDS = 180.0
 
+_HEADER_KEY = REPORT_NAME_HEADER.lower().encode("ascii")
+
+
+def report_name_from_path(path: str) -> str:
+    """The report a ``/report/pdf/<name>/...`` path renders, or ``""``.
+
+    Only the two routes that carry the name in the path answer; every other
+    report route - ``/report/download``, the ``/account/download_*`` family -
+    names nothing here.
+    """
+    for prefix in REPORT_NAME_PATH_PREFIXES:
+        if path.startswith(prefix):
+            return path[len(prefix) :].split("/", 1)[0]
+    return ""
+
+
+def _header_name(info: QWebEngineUrlRequestInfo) -> str:
+    """The report name the page stamped on this request, or ``""``."""
+    try:
+        headers = info.httpHeaders()
+    except AttributeError:  # pragma: no cover - Qt before 6.5
+        return ""
+    for key, value in headers.items():
+        if bytes(key).lower() == _HEADER_KEY:
+            return bytes(value).decode("ascii", "replace").strip()
+    return ""
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedReport:
+    """A report request that a download has been matched to."""
+
+    #: Odoo's technical name for the report, or ``""`` when nothing said.
+    name: str
+
 
 class ReportRequestWatcher(QWebEngineUrlRequestInterceptor):
     """Notes outgoing Odoo report requests so their blob download can be tagged."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._pending: deque[float] = deque()
+        #: ``(seen_at, report_name)``, oldest first.
+        self._pending: deque[tuple[float, str]] = deque()
         self._lock = Lock()
 
     # -- IO thread ---------------------------------------------------------
@@ -60,27 +114,36 @@ class ReportRequestWatcher(QWebEngineUrlRequestInterceptor):
         path = info.requestUrl().path()
         if not any(path.startswith(prefix) for prefix in REPORT_URL_PREFIXES):
             return
+        name = _header_name(info) or report_name_from_path(path)
         with self._lock:
-            self._pending.append(time.monotonic())
-        _log.debug("Report request seen: %s %s", info.requestMethod(), path)
+            self._pending.append((time.monotonic(), name))
+        _log.debug(
+            "Report request seen: %s %s (%s)", info.requestMethod(), path, name or "unnamed"
+        )
 
     # -- GUI thread --------------------------------------------------------
 
-    def claim(self) -> bool:
+    def claim(self) -> ClaimedReport | None:
         """Consume one pending report request, if any is still fresh.
 
-        Returns ``True`` when the caller may treat the download it is holding
-        as a report. Expired entries are dropped rather than claimed.
+        Returns the claimed report when the caller may treat the download it
+        is holding as one, and ``None`` otherwise. Expired entries are dropped
+        rather than claimed.
+
+        Oldest first, which pairs each download with its own request as long
+        as Odoo answers them in the order they were asked - true of the one
+        report a person prints at a time. Two printed within the same few
+        seconds, the second rendering faster, would swap names.
         """
         now = time.monotonic()
         with self._lock:
-            while self._pending and now - self._pending[0] > _TTL_SECONDS:
-                dropped = self._pending.popleft()
-                _log.debug("Dropping report request seen %.0fs ago", now - dropped)
+            while self._pending and now - self._pending[0][0] > _TTL_SECONDS:
+                seen_at, _name = self._pending.popleft()
+                _log.debug("Dropping report request seen %.0fs ago", now - seen_at)
             if not self._pending:
-                return False
-            self._pending.popleft()
-            return True
+                return None
+            _seen_at, name = self._pending.popleft()
+            return ClaimedReport(name)
 
     @property
     def pending_count(self) -> int:

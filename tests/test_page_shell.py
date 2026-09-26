@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -189,3 +190,41 @@ def test_one_column_does_not_leave_half_the_page_empty(columns: CardColumns) -> 
 
     columns.resize(1000, 400)
     assert columns._row.stretch(1) == 1
+
+
+def test_a_card_that_grows_after_the_page_is_shown_gets_the_room(qtbot) -> None:
+    """The regression behind a crushed Report printers card.
+
+    ``_drain`` used to leave each ``QWidgetItem`` it took alive, and Qt clears
+    only the first item ever made for a widget when that widget's size changes.
+    Every reflow re-adds the cards through new items, so a card that grew after
+    the page was up - rows added in ``on_enter``, which the router calls after
+    showing the page - kept the height its column measured on the first pass.
+    Wrapping labels matter: they make the cards height-for-width, which is the
+    cache that went stale.
+    """
+    shell = PageShell("Settings", "What this page is for.")
+    qtbot.addWidget(shell)
+    columns = CardColumns()
+    growing = QFrame()
+    body = QVBoxLayout(growing)
+    body.addWidget(_wrapping("A card whose rows arrive once the page is on screen. " * 3))
+    columns.add_card(_wrapping("Left. " * 40), column=0)
+    columns.add_card(growing, column=1)
+    columns.add_card(_wrapping("Below it. " * 30), column=1)
+    shell.body.addWidget(columns)
+    shell.resize(1200, 700)
+    shell.show()
+    qtbot.waitExposed(shell)
+
+    for index in range(8):
+        body.addWidget(QPushButton(f"Row {index}"))
+    qtbot.wait(50)
+
+    assert growing.height() >= growing.minimumSizeHint().height()
+
+
+def _wrapping(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    return label

@@ -15,6 +15,7 @@ one is a mode, one is a missing printer, one is a checkbox.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtWidgets import QApplication, QLabel
@@ -174,8 +175,10 @@ def test_an_assigned_receipt_printer_still_prints(
     )
     monkeypatch.setattr(page, "_is_pos", lambda: True)
     # _print refuses on a page with no web view, which is the state a page that
-    # has never signed in is in - stand one in so the route is reached.
-    monkeypatch.setattr(page, "_web", object())
+    # has never signed in is in - stand one in so the route is reached. It is
+    # asked where it is, because a report open in the PDF viewer has a printer
+    # of its own; this one is on the POS screen, as `_is_pos` says.
+    monkeypatch.setattr(page, "_web", SimpleNamespace(current_path=lambda: "/pos/ui"))
     monkeypatch.setattr(page._stack, "currentWidget", lambda: page._web)
 
     page._on_page_print_requested()

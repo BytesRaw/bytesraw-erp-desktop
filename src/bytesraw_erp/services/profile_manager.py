@@ -41,7 +41,11 @@ from bytesraw_erp.core.paths import (
     reports_dir,
 )
 from bytesraw_erp.data.models import Account
-from bytesraw_erp.services.report_watcher import ReportRequestWatcher
+from bytesraw_erp.services.report_watcher import (
+    ClaimedReport,
+    ReportRequestWatcher,
+    report_name_from_path,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -119,10 +123,11 @@ def _prune_reports(now: float | None = None) -> None:
 class ProfileManager(QObject):
     """Creates and owns one persistent web profile per account id."""
 
-    #: A QWeb report PDF finished downloading, with the path it landed at.
+    #: A QWeb report PDF finished downloading, with the path it landed at and
+    #: Odoo's technical name for the report - ``""`` when nothing named it.
     #: Printing is not done here - this layer has no business knowing the
     #: user's print settings - so the page decides what happens next.
-    report_downloaded = Signal(Path)
+    report_downloaded = Signal(Path, str)
     #: Any other download finished, saved in the Downloads folder.
     file_downloaded = Signal(Path)
 
@@ -326,7 +331,7 @@ class ProfileManager(QObject):
 
     # -- downloads ---------------------------------------------------------
 
-    def _claim_report(self, download: QWebEngineDownloadRequest) -> bool:
+    def _claim_report(self, download: QWebEngineDownloadRequest) -> ClaimedReport | None:
         """Was this blob download preceded by an Odoo report request?
 
         Only blob downloads are considered: a report that arrives as a real
@@ -334,9 +339,12 @@ class ProfileManager(QObject):
         request for it would consume the evidence twice.
         """
         if download.url().scheme() != "blob":
-            return False
-        # `any` short-circuits, so at most one pending request is consumed.
-        return any(watcher.claim() for watcher in self._watchers.values())
+            return None
+        for watcher in self._watchers.values():
+            # At most one pending request is consumed.
+            if (claimed := watcher.claim()) is not None:
+                return claimed
+        return None
 
     def _on_download_requested(self, download: QWebEngineDownloadRequest) -> None:
         """Accept a download, routing report PDFs aside so they can be printed.
@@ -352,10 +360,19 @@ class ProfileManager(QObject):
         url = download.url().toString()
         is_pdf = download.mimeType() == "application/pdf"
         # Two ways a report can arrive. A direct navigation still carries the
-        # report URL; Odoo 19's own Print button does not - it XHRs the report
-        # and saves a blob, so the only evidence is the request the watcher
-        # saw going out moments earlier.
-        is_report = is_pdf and (is_report_url(url) or self._claim_report(download))
+        # report URL, and names the report when it is a `/report/pdf/` one;
+        # Odoo 19's own Print button does not - it XHRs the report and saves a
+        # blob, so the only evidence is the request the watcher saw going out
+        # moments earlier, which carries the name the page stamped on it.
+        report_name = ""
+        if is_pdf and is_report_url(url):
+            is_report = True
+            report_name = report_name_from_path(download.url().path())
+        elif is_pdf and (claimed := self._claim_report(download)) is not None:
+            is_report = True
+            report_name = claimed.name
+        else:
+            is_report = False
 
         if is_report:
             _prune_reports()
@@ -376,8 +393,8 @@ class ProfileManager(QObject):
                 )
                 return
             if is_report:
-                _log.info("QWeb report ready: %s", target)
-                self.report_downloaded.emit(target)
+                _log.info("QWeb report ready: %s (%s)", target, report_name or "unnamed")
+                self.report_downloaded.emit(target, report_name)
             else:
                 _log.info("Download finished: %s", target)
                 self.file_downloaded.emit(target)

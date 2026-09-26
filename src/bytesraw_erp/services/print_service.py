@@ -19,6 +19,11 @@ Odoo's Print button should still leave the user holding a document.
 A printer slot can also be left **unassigned**, which is refused rather than
 fallen back on: see :func:`_build_printer`.
 
+A report can have a **printer of its own** (``PrintSettings.report_printers``).
+One that does is printed at its own page size, so a 57x32mm label on a label
+printer is not stretched over whatever stock that driver defaults to - see
+:func:`_fit_page_to_document`.
+
 Note on preview: Windows' own print dialog has **no preview pane** - the Win32
 dialog simply does not offer one, and ``QPrintDialog`` exposes no such option -
 so a preview cannot come from choosing "show the dialog". It has to be Qt's
@@ -48,8 +53,8 @@ import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QMarginsF, QObject, Signal
-from PySide6.QtGui import QPageLayout, QPainter
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QMarginsF, QObject, QSizeF, Signal
+from PySide6.QtGui import QPageLayout, QPageSize, QPainter
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import (
     QPrintDialog,
@@ -85,6 +90,46 @@ def default_printer_name() -> str:
 
 def available_printers() -> list[str]:
     return [info.printerName() for info in QPrinterInfo.availablePrinters()]
+
+
+_POINTS_PER_MM = 72 / 25.4
+
+
+def _fit_page_to_document(printer: QPrinter, document: QPdfDocument) -> None:
+    """Ask the printer for the document's own page size, with no margins.
+
+    ``_paint_document`` stretches each page over the printer's paper, which is
+    harmless for an A4 report on an A4 printer and ruinous for a label: a
+    57x32mm label on a driver still set to 100x150mm comes out as a distorted
+    smear. The PDF carries the size Odoo's paperformat laid it out for, which
+    is the stock the user loaded to print it on.
+
+    Only for a report with a printer of its own - that printer was chosen for
+    this document, so its paper is this document's. Asking the shared A4
+    printer for custom paper could leave it waiting for someone to load some.
+    A driver that refuses the size keeps its own, with a warning.
+    """
+    size = document.pagePointSize(0)
+    width, height = size.width(), size.height()
+    if width <= 0 or height <= 0:
+        return
+    orientation = (
+        QPageLayout.Orientation.Landscape if width > height else QPageLayout.Orientation.Portrait
+    )
+    page = QPageSize(
+        QSizeF(min(width, height), max(width, height)),
+        QPageSize.Unit.Point,
+        "",
+        QPageSize.SizeMatchPolicy.FuzzyMatch,
+    )
+    layout = QPageLayout(page, orientation, QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Point)
+    if not printer.setPageLayout(layout):
+        _log.warning(
+            "%s would not take a %.0fx%.0fmm page; printing on its own paper size",
+            printer.printerName(),
+            width / _POINTS_PER_MM,
+            height / _POINTS_PER_MM,
+        )
 
 
 def _build_printer(printer_name: str | None = "") -> QPrinter:
@@ -270,8 +315,13 @@ class PrintService(QObject):
         mode: PrintMode,
         parent: QWidget | None = None,
         printer_name: str | None = "",
+        *,
+        fit_to_document: bool = False,
     ) -> bool:
         """Print a PDF file - an Odoo report that was downloaded rather than shown.
+
+        ``fit_to_document`` prints at the PDF's own page size rather than on
+        the printer's current paper; see :func:`_fit_page_to_document`.
 
         Every route below is synchronous - painting runs to completion, and the
         preview dialog owns the event loop until it is dismissed - so the
@@ -285,6 +335,10 @@ class PrintService(QObject):
 
             printer = _build_printer(printer_name)
             printer.setDocName(path.stem)
+            if fit_to_document:
+                # Before the dialog and the preview, so both show the paper
+                # the document will actually come out on.
+                _fit_page_to_document(printer, document)
             if mode is PrintMode.PREVIEW:
                 return self._preview_document(document, printer, parent)
             if mode is PrintMode.DIALOG and not self._confirm(printer, parent):
@@ -375,15 +429,24 @@ class PrintService(QObject):
         path: Path,
         settings: PrintSettings,
         parent: QWidget | None = None,
+        report_name: str = "",
     ) -> bool:
-        """Print a report PDF using the app's configured mode and A4 printer.
+        """Print a report PDF using the app's configured mode and printer.
 
-        A QWeb report is an A4 document wherever it was rendered from, so this
-        route never consults the POS printer - not even for an invoice printed
-        from inside a POS session, which is the case that made the split
-        necessary.
+        A report with a printer of its own goes there, at its own page size.
+        Every other report is an A4 document wherever it was rendered from, so
+        this route never consults the POS printer - not even for an invoice
+        printed from inside a POS session, which is the case that made the
+        split necessary.
         """
-        return self.print_pdf(path, settings.mode, parent, settings.report_printer_name)
+        rule = settings.rule_for(report_name)
+        return self.print_pdf(
+            path,
+            settings.mode,
+            parent,
+            settings.report_printer_for(report_name),
+            fit_to_document=rule is not None,
+        )
 
     # -- helpers -----------------------------------------------------------
 
